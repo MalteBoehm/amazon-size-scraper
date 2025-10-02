@@ -72,8 +72,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install playwright (chromium)
 RUN go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5200.0 install chromium
 
-# Create logs directory
-RUN mkdir -p logs/html
+# Create logs directory and proxy data directory
+RUN mkdir -p logs/html proxy_data
 
 # Expose port
 EXPOSE 8084

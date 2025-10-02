@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 # Docker Compose Override File for Development
 # This file automatically extends docker-compose.yml when running locally
@@ -24,7 +24,7 @@ services:
 
     # Mount source code for development (comment out for production)
     volumes:
-      - ./proxy_list:/app/proxy_list:ro
+      - ./proxy_list:/app/proxy_data/proxy_list:ro
       - scraper_logs:/app/logs
       - /dev/shm:/dev/shm
       # Development volume mounts - uncomment for hot reload
