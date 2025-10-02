@@ -48,7 +48,7 @@ services:
       SCRAPER_HTML_LOG_DIR: ${SCRAPER_HTML_LOG_DIR:-/app/logs/html}
 
       # Proxy Configuration
-      USE_PROXIES: ${USE_PROXIES:-true}
+      USE_PROXIES: ${USE_PROXIES:-false}
       PROXY_LIST_FILE: ${PROXY_LIST_FILE:-/app/proxy_list}
 
       # Server Configuration
@@ -58,7 +58,7 @@ services:
     ports:
       - "${SERVER_PORT:-8084}:8084"
     volumes:
-      - ./proxy_list:/app/proxy_list:ro
+      - proxy_list:/app/proxy_list:ro
       - scraper_logs:/app/logs
       - /dev/shm:/dev/shm # Shared memory for Playwright
     networks:
@@ -119,5 +119,7 @@ networks:
     external: true
 
 volumes:
+  proxy_list:
+    name: amazon-scraper-proxy-list
   scraper_logs:
     name: amazon-scraper-logs
