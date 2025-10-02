@@ -1,0 +1,612 @@
+# Rule: Redis Patterns
+
+Implement Redis patterns for caching, event streaming, and distributed coordination.
+
+## Connection Management
+
+Configure Redis connections properly:
+
+```go
+// Rule: Use connection pooling with proper settings
+type RedisConfig struct {
+    URL              string
+    Password         string
+    DB               int
+    MaxRetries       int
+    MinRetryBackoff  time.Duration
+    MaxRetryBackoff  time.Duration
+    DialTimeout      time.Duration
+    ReadTimeout      time.Duration
+    WriteTimeout     time.Duration
+    PoolSize         int
+    MinIdleConns     int
+    MaxConnAge       time.Duration
+    PoolTimeout      time.Duration
+    IdleTimeout      time.Duration
+}
+
+func NewRedisClient(config RedisConfig) (*redis.Client, error) {
+    opts := &redis.Options{
+        Addr:            config.URL,
+        Password:        config.Password,
+        DB:              config.DB,
+        MaxRetries:      config.MaxRetries,
+        MinRetryBackoff: config.MinRetryBackoff,
+        MaxRetryBackoff: config.MaxRetryBackoff,
+        DialTimeout:     config.DialTimeout,
+        ReadTimeout:     config.ReadTimeout,
+        WriteTimeout:    config.WriteTimeout,
+        PoolSize:        config.PoolSize,
+        MinIdleConns:    config.MinIdleConns,
+        MaxConnAge:      config.MaxConnAge,
+        PoolTimeout:     config.PoolTimeout,
+        IdleTimeout:     config.IdleTimeout,
+        
+        // Custom hooks
+        OnConnect: func(ctx context.Context, cn *redis.Conn) error {
+            // Ping on connect
+            return cn.Ping(ctx).Err()
+        },
+    }
+    
+    client := redis.NewClient(opts)
+    
+    // Test connection
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    
+    if err := client.Ping(ctx).Err(); err != nil {
+        return nil, fmt.Errorf("redis ping failed: %w", err)
+    }
+    
+    return client, nil
+}
+
+// Rule: Implement connection health checks
+type RedisHealthChecker struct {
+    client *redis.Client
+}
+
+func (h *RedisHealthChecker) Check(ctx context.Context) error {
+    // Check connection
+    if err := h.client.Ping(ctx).Err(); err != nil {
+        return fmt.Errorf("redis ping failed: %w", err)
+    }
+    
+    // Check pool stats
+    stats := h.client.PoolStats()
+    if stats.IdleConns == 0 && stats.TotalConns >= h.client.Options().PoolSize {
+        return fmt.Errorf("redis pool exhausted: %d/%d connections", 
+            stats.TotalConns, h.client.Options().PoolSize)
+    }
+    
+    return nil
+}
+```
+
+## Key Naming Conventions
+
+Use consistent key naming patterns:
+
+```go
+// Rule: Use hierarchical key naming
+type KeyBuilder struct {
+    service   string
+    separator string
+}
+
+func NewKeyBuilder(service string) *KeyBuilder {
+    return &KeyBuilder{
+        service:   service,
+        separator: ":",
+    }
+}
+
+func (kb *KeyBuilder) Build(parts ...string) string {
+    allParts := append([]string{kb.service}, parts...)
+    return strings.Join(allParts, kb.separator)
+}
+
+// Examples:
+// product:cache:B123456789          - Product cache
+// product:lock:update:B123456789    - Distributed lock
+// user:session:abc123               - User session
+// stats:daily:2024-01-15            - Daily statistics
+// queue:pending:orders              - Pending orders queue
+
+// Rule: Use prefixes for different data types
+const (
+    PrefixCache   = "cache"
+    PrefixLock    = "lock"
+    PrefixSession = "session"
+    PrefixStats   = "stats"
+    PrefixQueue   = "queue"
+    PrefixStream  = "stream"
+    PrefixPubSub  = "pubsub"
+)
+
+// Rule: Include TTL in key name for debugging
+func (kb *KeyBuilder) BuildWithTTL(ttl time.Duration, parts ...string) string {
+    ttlPart := fmt.Sprintf("ttl%d", int(ttl.Seconds()))
+    allParts := append(parts, ttlPart)
+    return kb.Build(allParts...)
+}
+```
+
+## Caching Patterns
+
+Implement efficient caching strategies:
+
+```go
+// Rule: Use cache-aside pattern with proper serialization
+type CacheService struct {
+    client     *redis.Client
+    keyBuilder *KeyBuilder
+    logger     *slog.Logger
+}
+
+// Rule: Generic cache methods with type safety
+func (c *CacheService) Get(ctx context.Context, key string, dest interface{}) (bool, error) {
+    val, err := c.client.Get(ctx, key).Result()
+    if err == redis.Nil {
+        return false, nil
+    }
+    if err != nil {
+        return false, fmt.Errorf("redis get: %w", err)
+    }
+    
+    if err := json.Unmarshal([]byte(val), dest); err != nil {
+        return false, fmt.Errorf("unmarshal: %w", err)
+    }
+    
+    return true, nil
+}
+
+func (c *CacheService) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
+    data, err := json.Marshal(value)
+    if err != nil {
+        return fmt.Errorf("marshal: %w", err)
+    }
+    
+    return c.client.Set(ctx, key, data, ttl).Err()
+}
+
+// Rule: Implement cache warming
+func (c *CacheService) WarmCache(ctx context.Context, keys []string, loader func(string) (interface{}, error)) error {
+    pipe := c.client.Pipeline()
+    
+    for _, key := range keys {
+        data, err := loader(key)
+        if err != nil {
+            c.logger.Warn("failed to load data for cache warming", 
+                "key", key, 
+                "error", err)
+            continue
+        }
+        
+        jsonData, err := json.Marshal(data)
+        if err != nil {
+            continue
+        }
+        
+        pipe.Set(ctx, key, jsonData, 1*time.Hour)
+    }
+    
+    _, err := pipe.Exec(ctx)
+    return err
+}
+
+// Rule: Implement cache stampede prevention
+func (c *CacheService) GetOrLoad(ctx context.Context, key string, dest interface{}, 
+    loader func() (interface{}, error), ttl time.Duration) error {
+    
+    // Try to get from cache
+    found, err := c.Get(ctx, key, dest)
+    if err != nil {
+        return err
+    }
+    if found {
+        return nil
+    }
+    
+    // Use SETNX for distributed lock
+    lockKey := c.keyBuilder.Build(PrefixLock, key)
+    locked, err := c.client.SetNX(ctx, lockKey, "1", 30*time.Second).Result()
+    if err != nil {
+        return err
+    }
+    
+    if !locked {
+        // Another process is loading, wait and retry
+        time.Sleep(100 * time.Millisecond)
+        return c.GetOrLoad(ctx, key, dest, loader, ttl)
+    }
+    
+    defer c.client.Del(ctx, lockKey)
+    
+    // Load data
+    data, err := loader()
+    if err != nil {
+        return err
+    }
+    
+    // Cache the result
+    if err := c.Set(ctx, key, data, ttl); err != nil {
+        c.logger.Warn("failed to cache result", "key", key, "error", err)
+    }
+    
+    // Copy to destination
+    jsonData, _ := json.Marshal(data)
+    return json.Unmarshal(jsonData, dest)
+}
+```
+
+## Redis Streams for Events
+
+Use Redis Streams for event sourcing:
+
+```go
+// Rule: Implement Redis Streams producer
+type StreamProducer struct {
+    client     *redis.Client
+    streamKey  string
+    maxLen     int64
+    logger     *slog.Logger
+}
+
+func (p *StreamProducer) Publish(ctx context.Context, event Event) error {
+    // Serialize event
+    data := map[string]interface{}{
+        "id":        event.ID,
+        "type":      event.Type,
+        "timestamp": event.Timestamp.Unix(),
+        "data":      event.Data,
+    }
+    
+    // Add to stream with automatic ID
+    args := &redis.XAddArgs{
+        Stream: p.streamKey,
+        Values: data,
+    }
+    
+    // Limit stream size
+    if p.maxLen > 0 {
+        args.MaxLen = p.maxLen
+        args.Approx = true
+    }
+    
+    id, err := p.client.XAdd(ctx, args).Result()
+    if err != nil {
+        return fmt.Errorf("xadd: %w", err)
+    }
+    
+    p.logger.Debug("event published", 
+        "stream", p.streamKey,
+        "event_id", event.ID,
+        "stream_id", id,
+    )
+    
+    return nil
+}
+
+// Rule: Implement Redis Streams consumer
+type StreamConsumer struct {
+    client       *redis.Client
+    streamKey    string
+    groupName    string
+    consumerName string
+    logger       *slog.Logger
+}
+
+func (c *StreamConsumer) Consume(ctx context.Context, handler func(Event) error) error {
+    // Create consumer group
+    err := c.client.XGroupCreateMkStream(ctx, c.streamKey, c.groupName, "$").Err()
+    if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
+        return fmt.Errorf("create consumer group: %w", err)
+    }
+    
+    for {
+        // Read from stream
+        streams, err := c.client.XReadGroup(ctx, &redis.XReadGroupArgs{
+            Group:    c.groupName,
+            Consumer: c.consumerName,
+            Streams:  []string{c.streamKey, ">"},
+            Count:    10,
+            Block:    5 * time.Second,
+            NoAck:    false,
+        }).Result()
+        
+        if err != nil {
+            if err == redis.Nil {
+                continue
+            }
+            return fmt.Errorf("xreadgroup: %w", err)
+        }
+        
+        for _, stream := range streams {
+            for _, msg := range stream.Messages {
+                // Process message
+                event := parseEvent(msg.Values)
+                
+                if err := handler(event); err != nil {
+                    c.logger.Error("failed to handle event",
+                        "error", err,
+                        "message_id", msg.ID,
+                    )
+                    // Don't ACK on error
+                    continue
+                }
+                
+                // ACK message
+                c.client.XAck(ctx, c.streamKey, c.groupName, msg.ID)
+            }
+        }
+        
+        // Check context
+        select {
+        case <-ctx.Done():
+            return ctx.Err()
+        default:
+        }
+    }
+}
+```
+
+## Distributed Locking
+
+Implement distributed locks with Redis:
+
+```go
+// Rule: Use Redlock algorithm for distributed locking
+type DistributedLock struct {
+    client     *redis.Client
+    key        string
+    value      string
+    expiration time.Duration
+}
+
+func NewDistributedLock(client *redis.Client, resource string, ttl time.Duration) *DistributedLock {
+    return &DistributedLock{
+        client:     client,
+        key:        fmt.Sprintf("lock:%s", resource),
+        value:      generateLockValue(),
+        expiration: ttl,
+    }
+}
+
+func (l *DistributedLock) Acquire(ctx context.Context) (bool, error) {
+    // Use SET with NX and EX
+    ok, err := l.client.SetNX(ctx, l.key, l.value, l.expiration).Result()
+    if err != nil {
+        return false, fmt.Errorf("acquire lock: %w", err)
+    }
+    
+    return ok, nil
+}
+
+func (l *DistributedLock) Release(ctx context.Context) error {
+    // Use Lua script to ensure atomic release
+    script := redis.NewScript(`
+        if redis.call("get", KEYS[1]) == ARGV[1] then
+            return redis.call("del", KEYS[1])
+        else
+            return 0
+        end
+    `)
+    
+    _, err := script.Run(ctx, l.client, []string{l.key}, l.value).Result()
+    return err
+}
+
+// Rule: Implement lock with automatic renewal
+type RenewableLock struct {
+    *DistributedLock
+    stopRenewal chan struct{}
+    renewed     chan struct{}
+}
+
+func (l *RenewableLock) AcquireWithRenewal(ctx context.Context) (bool, error) {
+    acquired, err := l.Acquire(ctx)
+    if err != nil || !acquired {
+        return acquired, err
+    }
+    
+    l.stopRenewal = make(chan struct{})
+    l.renewed = make(chan struct{})
+    
+    // Start renewal goroutine
+    go func() {
+        ticker := time.NewTicker(l.expiration / 2)
+        defer ticker.Stop()
+        
+        for {
+            select {
+            case <-ticker.C:
+                // Renew lock
+                if err := l.client.Expire(ctx, l.key, l.expiration).Err(); err != nil {
+                    return
+                }
+                select {
+                case l.renewed <- struct{}{}:
+                default:
+                }
+            case <-l.stopRenewal:
+                return
+            case <-ctx.Done():
+                return
+            }
+        }
+    }()
+    
+    return true, nil
+}
+
+func (l *RenewableLock) Release(ctx context.Context) error {
+    close(l.stopRenewal)
+    return l.DistributedLock.Release(ctx)
+}
+```
+
+## Pub/Sub Patterns
+
+Implement pub/sub for real-time updates:
+
+```go
+// Rule: Implement typed pub/sub
+type PubSubService struct {
+    client  *redis.Client
+    logger  *slog.Logger
+}
+
+type Message struct {
+    Type    string          `json:"type"`
+    Payload json.RawMessage `json:"payload"`
+}
+
+func (s *PubSubService) Publish(ctx context.Context, channel string, msg Message) error {
+    data, err := json.Marshal(msg)
+    if err != nil {
+        return fmt.Errorf("marshal message: %w", err)
+    }
+    
+    return s.client.Publish(ctx, channel, data).Err()
+}
+
+func (s *PubSubService) Subscribe(ctx context.Context, handler func(Message), channels ...string) error {
+    pubsub := s.client.Subscribe(ctx, channels...)
+    defer pubsub.Close()
+    
+    // Wait for subscription confirmation
+    _, err := pubsub.Receive(ctx)
+    if err != nil {
+        return fmt.Errorf("subscribe: %w", err)
+    }
+    
+    ch := pubsub.Channel()
+    
+    for {
+        select {
+        case msg := <-ch:
+            var message Message
+            if err := json.Unmarshal([]byte(msg.Payload), &message); err != nil {
+                s.logger.Error("failed to unmarshal message", 
+                    "error", err,
+                    "payload", msg.Payload,
+                )
+                continue
+            }
+            
+            handler(message)
+            
+        case <-ctx.Done():
+            return ctx.Err()
+        }
+    }
+}
+```
+
+## Rate Limiting
+
+Implement rate limiting with Redis:
+
+```go
+// Rule: Use sliding window rate limiter
+type RateLimiter struct {
+    client *redis.Client
+    logger *slog.Logger
+}
+
+func (r *RateLimiter) Allow(ctx context.Context, key string, limit int, window time.Duration) (bool, error) {
+    now := time.Now()
+    windowStart := now.Add(-window).UnixMilli()
+    
+    pipe := r.client.Pipeline()
+    
+    // Remove old entries
+    pipe.ZRemRangeByScore(ctx, key, "0", fmt.Sprintf("%d", windowStart))
+    
+    // Count current entries
+    count := pipe.ZCard(ctx, key)
+    
+    // Add current request
+    pipe.ZAdd(ctx, key, redis.Z{
+        Score:  float64(now.UnixMilli()),
+        Member: now.UnixNano(), // Unique member
+    })
+    
+    // Set expiration
+    pipe.Expire(ctx, key, window)
+    
+    _, err := pipe.Exec(ctx)
+    if err != nil {
+        return false, err
+    }
+    
+    currentCount := count.Val()
+    return currentCount < int64(limit), nil
+}
+
+// Rule: Implement token bucket rate limiter
+type TokenBucket struct {
+    client   *redis.Client
+    key      string
+    capacity int
+    refillRate int
+    refillPeriod time.Duration
+}
+
+func (tb *TokenBucket) Consume(ctx context.Context, tokens int) (bool, error) {
+    script := redis.NewScript(`
+        local key = KEYS[1]
+        local capacity = tonumber(ARGV[1])
+        local tokens_requested = tonumber(ARGV[2])
+        local refill_rate = tonumber(ARGV[3])
+        local refill_period = tonumber(ARGV[4])
+        local now = tonumber(ARGV[5])
+        
+        local bucket = redis.call('HMGET', key, 'tokens', 'last_refill')
+        local current_tokens = tonumber(bucket[1]) or capacity
+        local last_refill = tonumber(bucket[2]) or now
+        
+        -- Calculate tokens to add
+        local elapsed = now - last_refill
+        local tokens_to_add = math.floor(elapsed / refill_period * refill_rate)
+        current_tokens = math.min(capacity, current_tokens + tokens_to_add)
+        
+        if current_tokens >= tokens_requested then
+            current_tokens = current_tokens - tokens_requested
+            redis.call('HMSET', key, 'tokens', current_tokens, 'last_refill', now)
+            redis.call('EXPIRE', key, refill_period * 2)
+            return 1
+        else
+            return 0
+        end
+    `)
+    
+    result, err := script.Run(ctx, tb.client, 
+        []string{tb.key},
+        tb.capacity,
+        tokens,
+        tb.refillRate,
+        tb.refillPeriod.Milliseconds(),
+        time.Now().UnixMilli(),
+    ).Int()
+    
+    if err != nil {
+        return false, err
+    }
+    
+    return result == 1, nil
+}
+```
+
+## Best Practices
+
+1. **Connection Pooling**: Configure pool size based on workload
+2. **Key Expiration**: Always set TTL to prevent memory leaks
+3. **Pipelining**: Use pipelines for batch operations
+4. **Lua Scripts**: Use for atomic operations
+5. **Error Handling**: Handle redis.Nil separately
+6. **Monitoring**: Track connection pool metrics
+7. **Serialization**: Use efficient serialization (msgpack for large data)
+8. **Key Design**: Keep keys short but descriptive

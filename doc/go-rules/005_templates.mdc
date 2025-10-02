@@ -1,0 +1,26 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+description: Richtlinien für HTML-Templates in Go
+globs: **/*.tmpl,**/*.html
+alwaysApply: false
+---
+
+# Templating (`html/template` & `text/template`)
+
+- Use `html/template` for generating HTML responses to benefit from automatic context-aware escaping.
+- Use `text/template` for generating plain-text content like email bodies.
+- Store templates in dedicated directories (e.g., `ui/html/`, `internal/mailer/templates/`).
+- Use a consistent file extension (e.g., `.tmpl`).
+- For web applications, create a template cache (`map[string]*template.Template`) initialized at startup using `template.ParseFiles()` or `template.ParseFS()`. Inject the cache into the `application` struct.
+- For email templates, parse them on-demand within the mailer's `Send` method using `template.ParseFS()` with an `embed.FS`.
+- Use a `templateData` struct (web) or `map[string]any` (email) to pass multiple pieces of data to templates.
+- Define a `render()` helper method on `application` (web) to render templates from the cache.
+- Render templates to a `bytes.Buffer` first to catch runtime errors before writing to `http.ResponseWriter` or sending the email.
+- Use template composition: define base/layout templates and named content blocks (`{{define "name"}}...{{end}}`). Use actions like `{{template "main" .}}` to include blocks.
+- Use `{{if}}`, `{{with}}`, `{{range}}` actions for control flow. Remember `{{with}}` and `{{range}}` change the dot (`.`) context.
+- Pass data (`.`) explicitly when invoking templates: `{{template "name" .}}`.
+- Create custom template functions using `template.FuncMap` and register them with `template.New().Funcs()`.
+- For emails, define separate named templates within a single file for `subject`, `plainBody`, and `htmlBody`. Execute each template separately.

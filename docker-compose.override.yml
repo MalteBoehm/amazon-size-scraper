@@ -1,0 +1,90 @@
+version: '3.8'
+
+# Docker Compose Override File for Development
+# This file automatically extends docker-compose.yml when running locally
+# Coolify and production deployments will ignore this file
+
+services:
+  # Override size-scraper for development
+  size-scraper:
+    # Development settings
+    environment:
+      # Enable debug mode for development
+      DEBUG_MODE: "true"
+      LOG_LEVEL: "debug"
+      SCRAPER_LOG_HTML: "true"
+
+      # Show browser for debugging (set to "false" for background scraping)
+      BROWSER_HEADLESS: "false"
+
+      # Faster scraping for development (reduce if you get blocked)
+      SCRAPER_RATE_LIMIT_MIN: "2s"
+      SCRAPER_RATE_LIMIT_MAX: "10s"
+      SCRAPER_CONCURRENT_LIMIT: "1"
+
+    # Mount source code for development (comment out for production)
+    volumes:
+      - ./proxy_list:/app/proxy_list:ro
+      - scraper_logs:/app/logs
+      - /dev/shm:/dev/shm
+      # Development volume mounts - uncomment for hot reload
+      # - ./cmd:/app/cmd:ro
+      # - ./internal:/app/internal:ro
+      # - ./pkg:/app/pkg:ro
+
+    # Additional port for debugging
+    ports:
+      - "${SERVER_PORT:-8084}:8084"
+      # Uncomment for Go debugging with delve
+      # - "40000:40000"
+
+    # Keep container running for debugging
+    tty: true
+    stdin_open: true
+
+  # Override postgres for development
+  postgres:
+    # Additional port for external access
+    ports:
+      - "${DB_PORT:-5432}:5432"
+      # Alternative port to avoid conflicts
+      # - "5433:5432"
+
+    # Development settings
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-amazon_scraper}
+
+    # Mount migrations for manual execution if needed
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+      # Uncomment for SQL access to migrations
+      # - ./migrations:/migrations:ro
+
+  # Override redis for development
+  redis:
+    # Additional port for external access
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+      # Alternative port to avoid conflicts
+      # - "6380:6379"
+
+    # Redis GUI development tools can connect here
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+
+# Development volumes
+volumes:
+  postgres_data:
+    name: amazon-scraper-postgres-dev-data
+  redis_data:
+    name: amazon-scraper-redis-dev-data
+  scraper_logs:
+    name: amazon-scraper-logs-dev
+
+# Development network
+networks:
+  scraper-network:
+    driver: bridge
+    name: amazon-scraper-dev-network

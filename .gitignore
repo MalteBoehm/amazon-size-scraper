@@ -1,0 +1,95 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Build directory
+/build/
+/dist/
+/bin/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+logs/
+
+# Playwright browsers
+playwright-browsers/
+
+# Test data
+testdata/
+coverage.html
+coverage.txt
+*.json
+*-asins.txt
+*-urls.txt
+test-*.txt
+
+# Test scripts and debug files
+test_*.go
+debug_*.go
+*_test.py
+*_crawler.py
+*.disabled
+
+# Screenshots and images
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Compiled binaries
+server
+server-linux
+amazon-scraper
+/amazon-scraper
+batch-enricher
+
+# SQL scripts (test data)
+*.sql
+
+# Temporary files
+tmp/
+temp/
+
+# Project specific
+configs/local.yaml
+scraped_data/
+.clinerules/byterover-rules.md
+.kilocode/rules/byterover-rules.md
+.roo/rules/byterover-rules.md
+.windsurf/rules/byterover-rules.md
+.cursor/rules/byterover-rules.mdc
+.kiro/steering/byterover-rules.md
+.qoder/rules/byterover-rules.md
+.augment/rules/byterover-rules.md

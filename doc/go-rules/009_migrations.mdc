@@ -1,0 +1,27 @@
+---
+description: 
+globs: **/migrations/*.sql,**/Makefile,**/cmd/api/main.go
+alwaysApply: false
+---
+# Data---
+description: Richtlinien für die Verwaltung von Datenbankschema-Migrationen mit golang-migrate/migrate
+globs:
+  - "**/migrations/*.sql"
+  - "**/Makefile"
+  - "**/cmd/api/main.go" # Where migrations might be triggered or configured
+alwaysApply: false
+---base Migrations
+
+- Use a dedicated migration tool like `golang-migrate/migrate`. Install the CLI tool.
+- Store migration files in a `./migrations` directory at the project root.
+- Use sequential numbering (`-seq`) and `.sql` extension (`-ext=.sql`) for migration files (e.g., `000001_create_movies_table.up.sql`, `000001_create_movies_table.down.sql`).
+- Create migration files using `migrate create -seq -ext=.sql -dir=./migrations <name>`.
+- Write the necessary DDL (CREATE TABLE, ALTER TABLE, CREATE INDEX, etc.) in the `.up.sql` file.
+- Write the corresponding DDL to reverse the changes (DROP TABLE, ALTER TABLE, DROP INDEX, etc.) in the `.down.sql` file.
+- Apply migrations using `migrate -path ./migrations -database $DSN up`. Pass the database DSN (e.g., from an environment variable like `GREENLIGHT_DB_DSN`).
+- The migration tool automatically creates and manages a `schema_migrations` table to track applied versions.
+- Roll back migrations using `migrate ... down N`, `migrate ... goto V`, or `migrate ... down` (rolls back all).
+- Handle migration errors: If an `up` migration fails partway, the database might be left in a 'dirty' state (marked in `schema_migrations`). Manually fix the database state if necessary, fix the migration file, and then use `migrate ... force V` to reset the state in `schema_migrations` before retrying the `up` migration.
+- Add Makefile rules for common migration tasks:
+    - `db/migrations/new name=<name>`: Creates new migration files.
+    - `db/migrations/up`: Applies all pending up migrations (potentially with a `confirm` prerequisite).

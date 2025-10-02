@@ -1,0 +1,55 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+description: 
+globs: **/*.go
+alwaysApply: false
+---
+# Security
+
+- **HTTPS:** Use HTTPS for all API traffic in production. Use Caddy or another reverse proxy for automatic HTTPS via Let's Encrypt/ZeroSSL. For development, use TLS (`srv.ListenAndServeTLS()`) with self-signed certificates if needed, but often plain HTTP is sufficient locally.
+- **Server Timeouts:** Configure `http.Server` with appropriate timeouts (`IdleTimeout`, `ReadTimeout`, `WriteTimeout`).
+- **Password Hashing:** Hash user passwords using bcrypt (`golang.org/x/crypto/bcrypt`) with a sufficient cost factor (e.g., 12). Store only the hash (`bytea` type in PostgreSQL). Use `GenerateFromPassword` on signup/password change and `CompareHashAndPassword` on login.
+- **Token Hashing:** For activation/password reset tokens (which are high-entropy), use a fast hash like SHA-256 (`crypto/sha256`) before storing in the database (`bytea` type). Store only the hash, not the plaintext token.
+- **Token Generation:** Generate activation/password reset/authentication tokens using a cryptographically secure pseudo-random number generator (CSPRNG) like `crypto/rand`. Use `rand.Read()` to fill a byte slice or `rand.Text()` (Go 1.24+) for base32-encoded strings. Ensure sufficient entropy (e.g., 128 bits / 16 bytes).
+- **Authentication:**
+    - Implement token-based authentication (stateful recommended for most typical web/API backends).
+    - Provide an endpoint (e.g., `POST /v1/tokens/authentication`) for users to exchange credentials (email/password) for a time-limited authentication token.
+    - Store stateful tokens (or their SHA-256 hash) in a `tokens` database table with user ID, expiry, and scope (`authentication`).
+    - Implement an `authenticate()` middleware:
+        - Check for `Authorization: Bearer <token>` header.
+        - If missing, add `AnonymousUser` to request context.
+        - If present, parse the token.
+        - Validate token format (e.g., length for stateful tokens).
+        - Look up the token hash in the database.
+        - Check token scope and expiry.
+        - Fetch the associated user details.
+        - Add the authenticated `User` struct to the request context.
+        - Send `401 Unauthorized` with `WWW-Authenticate: Bearer` header for any token errors.
+    - Use JWTs primarily for *delegated authentication* (e.g., microservices) or if statelessness is a hard requirement, being mindful of revocation difficulties and security complexities. (See Appendix).
+- **Authorization:**
+    - Implement permission-based authorization.
+    - Create `permissions` and `users_permissions` (joining) tables.
+    - Implement `PermissionModel` with `GetAllForUser(userID)` method.
+    - Implement `requirePermission(code string, next http.HandlerFunc)` middleware:
+        - Retrieve user from context (should wrap `requireActivatedUser`).
+        - Get user's permissions using `GetAllForUser()`.
+        - Check if the required `code` (e.g., "movies:read") is present in the user's permissions.
+        - If not permitted, send a `403 Forbidden` response using `app.notPermittedResponse()`.
+    - Implement `requireActivatedUser()` middleware (which wraps `requireAuthenticatedUser()`):
+        - Retrieve user from context.
+        - Check if `user.Activated` is true.
+        - If not activated, send `403 Forbidden` using `app.inactiveAccountResponse()`.
+    - Implement `requireAuthenticatedUser()` middleware:
+        - Retrieve user from context.
+        - Check if `user.IsAnonymous()`.
+        - If anonymous, send `401 Unauthorized` using `app.authenticationRequiredResponse()`.
+- **User Activation:** Implement an activation workflow to verify email addresses. Send an activation token via email upon registration. Provide an endpoint (e.g., `PUT /v1/users/activated`) to submit the token, verify it, activate the user, and delete the token.
+- **Password Reset:** Implement a password reset workflow. Provide endpoints to request a reset token (`POST /v1/tokens/password-reset`) and to submit the token with a new password (`PUT /v1/users/password`). Use short-lived, scoped tokens.
+- **Input Validation:** Rigorously validate all user input (request bodies, URL parameters, query strings) using the `internal/validator` package.
+- **SQL Injection:** Always use placeholder parameters (`$N` or `?`) for user-provided values in SQL queries. Safelist and carefully validate any values interpolated directly into SQL (like `ORDER BY` columns/directions).
+- **Rate Limiting:** Implement rate limiting (global or per-IP) to prevent abuse. (See `010_rate_limiting.mdc`).
+- **CORS:** Configure CORS carefully, especially when allowing credentials. Avoid overly permissive configurations. (See `012_cors.mdc`).
+- **CSRF:** While less critical for pure JSON APIs consumed by non-browser clients, if the API might be called from browser-based JavaScript originating from your own web frontend, standard CSRF protection (e.g., double-submit cookie or synchronizer token pattern via packages like `nosurf`) is still recommended, especially if using cookie-based session management alongside token authentication. However, bearer token authentication itself is generally resistant to CSRF if tokens are not stored in cookies accessible to JavaScript.

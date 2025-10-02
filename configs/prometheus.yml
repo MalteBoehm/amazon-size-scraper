@@ -1,0 +1,56 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'amazon-scraper'
+    static_configs:
+      - targets: ['localhost:2112']
+    metric_relabel_configs:
+      # Optional: Add relabeling rules if needed
+      - source_labels: [__name__]
+        regex: 'scraper_.*'
+        action: keep
+
+# Alerting rules can be defined in separate files
+rule_files:
+  - 'alerts/*.yml'
+
+# Example alert rules (save as alerts/scraper_alerts.yml)
+# groups:
+#   - name: scraper_alerts
+#     interval: 30s
+#     rules:
+#       - alert: HighExtractionFailureRate
+#         expr: |
+#           (
+#             sum(rate(scraper_field_extraction_total{status="failure"}[5m])) by (field) /
+#             sum(rate(scraper_field_extraction_total[5m])) by (field)
+#           ) > 0.3
+#         for: 5m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "High extraction failure rate for field {{ $labels.field }}"
+#           description: "Field {{ $labels.field }} has {{ $value | humanizePercentage }} failure rate"
+#       
+#       - alert: CaptchaDetected
+#         expr: increase(scraper_captcha_detected_total[5m]) > 0
+#         for: 1m
+#         labels:
+#           severity: critical
+#         annotations:
+#           summary: "CAPTCHA detected on Amazon"
+#           description: "Amazon has shown {{ $value }} CAPTCHA(s) in the last 5 minutes"
+#       
+#       - alert: SlowExtraction
+#         expr: |
+#           histogram_quantile(0.95,
+#             sum(rate(scraper_product_extraction_duration_seconds_bucket[5m])) by (le)
+#           ) > 30
+#         for: 10m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "Product extraction is slow"
+#           description: "95th percentile extraction time is {{ $value }}s"

@@ -1,0 +1,456 @@
+# Rule: Microservices Communication
+
+Implement robust service-to-service communication patterns with proper error handling, retries, and observability.
+
+## Service Discovery
+
+Use environment-based service discovery for simplicity:
+
+```go
+// Rule: Use configuration for service endpoints
+type ServiceRegistry struct {
+    APIGateway    string
+    ProductSvc    string
+    ContentSvc    string
+    BrowseNodeSvc string
+}
+
+// Rule: Load from environment with defaults
+func NewServiceRegistry() *ServiceRegistry {
+    return &ServiceRegistry{
+        APIGateway:    getEnvOrDefault("API_GATEWAY_URL", "http://api-gateway:8080"),
+        ProductSvc:    getEnvOrDefault("PRODUCT_SVC_URL", "http://product-lifecycle:8082"),
+        ContentSvc:    getEnvOrDefault("CONTENT_SVC_URL", "http://content-generation:8083"),
+        BrowseNodeSvc: getEnvOrDefault("BROWSE_NODE_SVC_URL", "http://browse-node:8084"),
+    }
+}
+```
+
+## HTTP Client Configuration
+
+Configure HTTP clients with appropriate timeouts and connection pooling:
+
+```go
+// Rule: Create reusable HTTP clients with sensible defaults
+type ServiceClient struct {
+    httpClient *http.Client
+    baseURL    string
+    logger     *slog.Logger
+}
+
+func NewServiceClient(baseURL string, logger *slog.Logger) *ServiceClient {
+    transport := &http.Transport{
+        MaxIdleConns:        100,
+        MaxIdleConnsPerHost: 10,
+        IdleConnTimeout:     90 * time.Second,
+        DisableCompression:  true,
+        DisableKeepAlives:   false,
+    }
+
+    return &ServiceClient{
+        httpClient: &http.Client{
+            Timeout:   30 * time.Second,
+            Transport: transport,
+        },
+        baseURL: baseURL,
+        logger:  logger,
+    }
+}
+```
+
+## Circuit Breaker
+
+Implement circuit breaker pattern to handle service failures:
+
+```go
+// Rule: Use circuit breaker for external service calls
+type CircuitBreaker struct {
+    mu              sync.RWMutex
+    failureCount    int
+    lastFailureTime time.Time
+    state           State
+    
+    maxFailures     int
+    timeout         time.Duration
+    cooldownPeriod  time.Duration
+}
+
+type State int
+
+const (
+    StateClosed State = iota
+    StateOpen
+    StateHalfOpen
+)
+
+func (cb *CircuitBreaker) Call(fn func() error) error {
+    cb.mu.Lock()
+    defer cb.mu.Unlock()
+
+    // Check if circuit should be reset
+    if cb.state == StateOpen && time.Since(cb.lastFailureTime) > cb.cooldownPeriod {
+        cb.state = StateHalfOpen
+        cb.failureCount = 0
+    }
+
+    // Reject calls if circuit is open
+    if cb.state == StateOpen {
+        return ErrCircuitOpen
+    }
+
+    // Execute the function
+    err := fn()
+    
+    if err != nil {
+        cb.failureCount++
+        cb.lastFailureTime = time.Now()
+        
+        if cb.failureCount >= cb.maxFailures {
+            cb.state = StateOpen
+            return fmt.Errorf("circuit breaker open: %w", err)
+        }
+        return err
+    }
+
+    // Success: reset on half-open or reduce failure count
+    if cb.state == StateHalfOpen {
+        cb.state = StateClosed
+    }
+    cb.failureCount = 0
+    return nil
+}
+```
+
+## Retry Strategy
+
+Implement exponential backoff with jitter:
+
+```go
+// Rule: Use exponential backoff for retries
+type RetryConfig struct {
+    MaxAttempts  int
+    InitialDelay time.Duration
+    MaxDelay     time.Duration
+    Multiplier   float64
+    Jitter       float64
+}
+
+func RetryWithBackoff(ctx context.Context, cfg RetryConfig, fn func() error) error {
+    var lastErr error
+    delay := cfg.InitialDelay
+
+    for attempt := 0; attempt < cfg.MaxAttempts; attempt++ {
+        if attempt > 0 {
+            // Add jitter to prevent thundering herd
+            jitter := time.Duration(rand.Float64() * cfg.Jitter * float64(delay))
+            select {
+            case <-time.After(delay + jitter):
+            case <-ctx.Done():
+                return ctx.Err()
+            }
+        }
+
+        lastErr = fn()
+        if lastErr == nil {
+            return nil
+        }
+
+        // Check if error is retryable
+        if !isRetryable(lastErr) {
+            return lastErr
+        }
+
+        // Calculate next delay
+        delay = time.Duration(float64(delay) * cfg.Multiplier)
+        if delay > cfg.MaxDelay {
+            delay = cfg.MaxDelay
+        }
+    }
+
+    return fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+// Rule: Determine which errors are retryable
+func isRetryable(err error) bool {
+    // Don't retry client errors (4xx)
+    var httpErr *HTTPError
+    if errors.As(err, &httpErr) {
+        return httpErr.StatusCode >= 500 || httpErr.StatusCode == 429
+    }
+    
+    // Retry network errors
+    var netErr net.Error
+    if errors.As(err, &netErr) {
+        return netErr.Temporary() || netErr.Timeout()
+    }
+    
+    return true
+}
+```
+
+## Request Tracing
+
+Implement distributed tracing across services:
+
+```go
+// Rule: Propagate trace context across service boundaries
+type TraceContext struct {
+    TraceID       string
+    SpanID        string
+    ParentSpanID  string
+    CorrelationID string
+}
+
+// Rule: Add trace headers to outgoing requests
+func (c *ServiceClient) DoWithTrace(ctx context.Context, req *http.Request) (*http.Response, error) {
+    // Extract trace context
+    trace := ExtractTraceContext(ctx)
+    
+    // Add trace headers
+    req.Header.Set("X-Trace-ID", trace.TraceID)
+    req.Header.Set("X-Span-ID", trace.SpanID)
+    req.Header.Set("X-Correlation-ID", trace.CorrelationID)
+    
+    // Log outgoing request
+    c.logger.Debug("outgoing request",
+        "method", req.Method,
+        "url", req.URL.String(),
+        "trace_id", trace.TraceID,
+    )
+    
+    start := time.Now()
+    resp, err := c.httpClient.Do(req)
+    duration := time.Since(start)
+    
+    // Log response
+    if err != nil {
+        c.logger.Error("request failed",
+            "error", err,
+            "duration_ms", duration.Milliseconds(),
+            "trace_id", trace.TraceID,
+        )
+    } else {
+        c.logger.Debug("request completed",
+            "status", resp.StatusCode,
+            "duration_ms", duration.Milliseconds(),
+            "trace_id", trace.TraceID,
+        )
+    }
+    
+    return resp, err
+}
+
+// Rule: Extract trace context from incoming requests
+func TraceMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        traceID := r.Header.Get("X-Trace-ID")
+        if traceID == "" {
+            traceID = generateTraceID()
+        }
+        
+        ctx := context.WithValue(r.Context(), TraceContextKey, TraceContext{
+            TraceID:       traceID,
+            SpanID:        generateSpanID(),
+            CorrelationID: r.Header.Get("X-Correlation-ID"),
+        })
+        
+        next.ServeHTTP(w, r.WithContext(ctx))
+    })
+}
+```
+
+## Health Checks
+
+Standardize health check endpoints:
+
+```go
+// Rule: Implement health checks for all services
+type HealthChecker struct {
+    checks []HealthCheck
+}
+
+type HealthCheck struct {
+    Name     string
+    CheckFn  func(ctx context.Context) error
+    Critical bool
+}
+
+type HealthStatus struct {
+    Status  string                 `json:"status"`
+    Checks  map[string]CheckResult `json:"checks"`
+    Version string                 `json:"version"`
+}
+
+type CheckResult struct {
+    Status   string `json:"status"`
+    Error    string `json:"error,omitempty"`
+    Duration int64  `json:"duration_ms"`
+}
+
+func (h *HealthChecker) Handler(w http.ResponseWriter, r *http.Request) {
+    ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+    defer cancel()
+    
+    status := &HealthStatus{
+        Status:  "healthy",
+        Checks:  make(map[string]CheckResult),
+        Version: version,
+    }
+    
+    for _, check := range h.checks {
+        start := time.Now()
+        err := check.CheckFn(ctx)
+        duration := time.Since(start).Milliseconds()
+        
+        result := CheckResult{
+            Status:   "healthy",
+            Duration: duration,
+        }
+        
+        if err != nil {
+            result.Status = "unhealthy"
+            result.Error = err.Error()
+            
+            if check.Critical {
+                status.Status = "unhealthy"
+            }
+        }
+        
+        status.Checks[check.Name] = result
+    }
+    
+    // Set appropriate status code
+    statusCode := http.StatusOK
+    if status.Status == "unhealthy" {
+        statusCode = http.StatusServiceUnavailable
+    }
+    
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(statusCode)
+    json.NewEncoder(w).Encode(status)
+}
+```
+
+## Service Mesh Patterns
+
+Implement common service mesh patterns:
+
+```go
+// Rule: Implement timeout propagation
+func PropagateTimeout(parentCtx context.Context, percentage float64) (context.Context, context.CancelFunc) {
+    deadline, ok := parentCtx.Deadline()
+    if !ok {
+        // No deadline in parent, use default
+        return context.WithTimeout(parentCtx, 30*time.Second)
+    }
+    
+    remaining := time.Until(deadline)
+    childTimeout := time.Duration(float64(remaining) * percentage)
+    
+    return context.WithTimeout(parentCtx, childTimeout)
+}
+
+// Rule: Implement request hedging for critical paths
+func HedgedRequest(ctx context.Context, primary, secondary func() error, delay time.Duration) error {
+    // Try primary first
+    primaryDone := make(chan error, 1)
+    go func() {
+        primaryDone <- primary()
+    }()
+    
+    // Start secondary after delay
+    secondaryDone := make(chan error, 1)
+    timer := time.NewTimer(delay)
+    defer timer.Stop()
+    
+    select {
+    case err := <-primaryDone:
+        if err == nil {
+            return nil
+        }
+        // Primary failed, wait for secondary
+    case <-timer.C:
+        // Start secondary request
+        go func() {
+            secondaryDone <- secondary()
+        }()
+    case <-ctx.Done():
+        return ctx.Err()
+    }
+    
+    // Wait for either to succeed
+    for i := 0; i < 2; i++ {
+        select {
+        case err := <-primaryDone:
+            if err == nil {
+                return nil
+            }
+        case err := <-secondaryDone:
+            if err == nil {
+                return nil
+            }
+        case <-ctx.Done():
+            return ctx.Err()
+        }
+    }
+    
+    return errors.New("both requests failed")
+}
+```
+
+## Service Client Example
+
+Complete example of a robust service client:
+
+```go
+// Rule: Combine all patterns in service clients
+type ProductServiceClient struct {
+    client         *ServiceClient
+    circuitBreaker *CircuitBreaker
+    retryConfig    RetryConfig
+    logger         *slog.Logger
+}
+
+func (c *ProductServiceClient) GetProduct(ctx context.Context, productID string) (*Product, error) {
+    var product Product
+    
+    err := c.circuitBreaker.Call(func() error {
+        return RetryWithBackoff(ctx, c.retryConfig, func() error {
+            // Build request
+            url := fmt.Sprintf("%s/api/v1/products/%s", c.client.baseURL, productID)
+            req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+            if err != nil {
+                return err
+            }
+            
+            // Execute with tracing
+            resp, err := c.client.DoWithTrace(ctx, req)
+            if err != nil {
+                return err
+            }
+            defer resp.Body.Close()
+            
+            // Handle response
+            if resp.StatusCode != http.StatusOK {
+                return &HTTPError{StatusCode: resp.StatusCode}
+            }
+            
+            return json.NewDecoder(resp.Body).Decode(&product)
+        })
+    })
+    
+    if err != nil {
+        return nil, fmt.Errorf("get product: %w", err)
+    }
+    
+    return &product, nil
+}
+```
+
+## Best Practices
+
+1. **Timeouts**: Always set timeouts at multiple levels (client, context, server)
+2. **Idempotency**: Make all operations idempotent where possible
+3. **Graceful Degradation**: Return partial results rather than failing completely
+4. **Bulkheading**: Isolate critical resources to prevent cascade failures
+5. **Monitoring**: Track success rates, latencies, and error rates for all calls

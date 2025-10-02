@@ -1,0 +1,81 @@
+---
+description: 
+globs: **/remote/**/*.sh,**/remote/**/*.service,**/remote/**/Caddyfile,**/Makefile
+alwaysApply: false
+---
+---
+description: Beispielrichtlinien für Deployment einer Go API auf Linux mit Systemd und Caddy als Reverse Proxy
+globs:
+  - "**/remote/**/*.sh"
+  - "**/remote/**/*.service"
+  - "**/remote/**/Caddyfile"
+  - "**/Makefile" # For deployment rules
+alwaysApply: false # Specific to deployment files/scripts
+---
+# Deployment (Linux/Systemd/Caddy Example)
+
+## Server Setup (Automated Script - e.g., `remote/setup/01.sh`)
+
+- Use `set -eu` for script robustness.
+- Update packages: `apt update && apt --yes upgrade`.
+- Set timezone: `timedatectl set-timezone Europe/Berlin`.
+- Install locales: `apt --yes install locales-all`.
+- Create a non-root user for the application: `useradd --create-home --shell "/bin/bash" --groups sudo "${USERNAME}"`. Force password change on first login: `passwd --delete "${USERNAME}" && chage --lastday 0 "${USERNAME}"`.
+- Copy root SSH keys to the new user: `rsync --archive --chown=${USERNAME}:${USERNAME} /root/.ssh /home/${USERNAME}`.
+- Configure firewall (`ufw`): Allow necessary ports (22/SSH, 80/HTTP, 443/HTTPS). Deny others by default. `ufw allow 22`, `ufw allow 80/tcp`, `ufw allow 443/tcp`, `ufw --force enable`.
+- Install security tools: `apt --yes install fail2ban`.
+- Install PostgreSQL: `apt --yes install postgresql`.
+- Configure PostgreSQL: Create database (`CREATE DATABASE greenlight`), enable extensions (`CREATE EXTENSION IF NOT EXISTS citext`), create role with password (`CREATE ROLE greenlight WITH LOGIN PASSWORD '${DB_PASSWORD}'`). Use `sudo -i -u postgres psql ...` commands. Prompt for DB password interactively in the script (`read -p ... DB_PASSWORD`) instead of hardcoding.
+- Set system-wide DSN environment variable: `echo "GREENLIGHT_DB_DSN='postgres://...'" >> /etc/environment`.
+- Install migration tool (`migrate`): Download binary from GitHub releases, move to `/usr/local/bin/`.
+- Install Caddy: Follow official instructions for the specific Linux distribution (e.g., using `apt` with Caddy's repository).
+- Reboot the server at the end of the script: `reboot`.
+
+## Deployment Process (Automated via Makefile - e.g., `make production/deploy/api`)
+
+- Define production host IP/domain in Makefile: `production_host_ip = ...`.
+- Use `rsync` to copy files to the droplet (connect as the non-root application user, e.g., `greenlight`):
+    - Copy the cross-compiled application binary (`./bin/linux_amd64/api`) to the user's home directory (`~`).
+    - Copy the `./migrations` directory to the user's home directory (`~`).
+    - Copy the systemd unit file (`./remote/production/api.service`) to the user's home directory (`~`).
+    - Copy the Caddyfile (`./remote/production/Caddyfile`) to the user's home directory (`~`).
+- Use `ssh -t user@host '...'` to execute commands remotely on the droplet:
+    - Run database migrations: `migrate -path ~/migrations -database $$GREENLIGHT_DB_DSN up` (escape `$` for make).
+    - Install the systemd unit file: `sudo mv ~/api.service /etc/systemd/system/`.
+    - Enable the service: `sudo systemctl enable api`.
+    - Restart the service: `sudo systemctl restart api`.
+    - Install the Caddyfile: `sudo mv ~/Caddyfile /etc/caddy/`.
+    - Reload Caddy configuration: `sudo systemctl reload caddy`.
+- Chain remote commands using `&&`.
+
+## Running as a Service (Systemd Unit File - `api.service`)
+
+- Place unit file in `/etc/systemd/system/`.
+- **[Unit]** section:
+    - `Description`: Human-readable name.
+    - `After`: Define dependencies (e.g., `postgresql.service`, `network-online.target`).
+    - `Wants`: Define weaker dependencies (e.g., `network-online.target`).
+    - `StartLimitIntervalSec`, `StartLimitBurst`: Configure start rate limiting.
+- **[Service]** section:
+    - `Type=exec` (or `Type=notify` if using systemd notifications).
+    - `User`, `Group`: Run the service as the non-root application user (e.g., `greenlight`).
+    - `EnvironmentFile=/etc/environment`: Load system-wide environment variables (like the DSN).
+    - `WorkingDirectory`: Set to the user's home directory or application directory.
+    - `ExecStart`: The command to start the application binary, including necessary command-line flags (e.g., `/home/greenlight/api -port=4000 -db-dsn=${GREENLIGHT_DB_DSN} -env=production`).
+    - `Restart=on-failure`: Automatically restart if the service exits with a non-zero code.
+    - `RestartSec=5`: Wait 5 seconds before restarting.
+    - If binding to restricted ports (<1024) without a reverse proxy: Add `CapabilityBoundingSet=CAP_NET_BIND_SERVICE` and `AmbientCapabilities=CAP_NET_BIND_SERVICE`.
+- **[Install]** section:
+    - `WantedBy=multi-user.target`: Enable the service to start automatically at boot for typical multi-user systems.
+- Manage the service using `sudo systemctl status|start|stop|restart|reload|enable|disable api`.
+- View service logs using `sudo journalctl -u api`.
+
+## Reverse Proxy (Caddyfile)
+
+- Place Caddyfile at `/etc/caddy/Caddyfile`.
+- Define a site block using the production domain name (e.g., `greenlight.alexedwards.net { ... }`).
+- Use the `reverse_proxy` directive to forward traffic to the backend API application (e.g., `reverse_proxy localhost:4000`).
+- Caddy automatically handles HTTPS provisioning and redirection from HTTP to HTTPS for known domain names.
+- Add an `email` directive within a global options block `{ ... }` at the top for TLS certificate notifications.
+- Use `respond` directive to block access to sensitive endpoints like `/debug/*` (e.g., `respond /debug/* "Not Permitted" 403`).
+- Reload Caddy after changing the Caddyfile: `sudo systemctl reload caddy`.

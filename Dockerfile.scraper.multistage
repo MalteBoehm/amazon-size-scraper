@@ -1,0 +1,60 @@
+# Build stage
+FROM golang:1.24-alpine AS builder
+
+# Install git for go mod download
+RUN apk add --no-cache git
+
+# Set working directory
+WORKDIR /app
+# Ensure the correct Go toolchain is used when go.mod requires a higher minor version
+ENV GOTOOLCHAIN=auto
+
+
+# Bring in local modules for replace directives (monorepo)
+COPY event-contracts /event-contracts
+# Using external tall-affiliate-common repository - no local copy needed
+
+# Copy go mod files from the amzon-size-scraper module
+COPY amzon-size-scraper/go.mod amzon-size-scraper/go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code of the amzon-size-scraper module
+COPY amzon-size-scraper/ .
+
+# Build the application in builder stage
+RUN CGO_ENABLED=0 GOOS=linux go build -o amazon-scraper ./cmd/amazon-scraper
+# Separate stage to install Playwright-Go driver on Debian (glibc)
+FROM golang:1.24 as driver-installer
+ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
+RUN go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5200.0 install chromium
+
+
+
+# Runtime stage
+FROM mcr.microsoft.com/playwright:v1.52.0-noble
+
+# Playwright base image already includes required browser dependencies
+
+
+
+# Set working directory
+WORKDIR /app
+
+# Copy Playwright browsers/driver from Debian-based installer stage into runtime
+ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
+COPY --from=driver-installer /root/.cache/ms-playwright /root/.cache/ms-playwright
+COPY --from=driver-installer /root/.cache/ms-playwright-go /root/.cache/ms-playwright-go
+
+# Copy the binary from builder
+COPY --from=builder /app/amazon-scraper .
+
+# Copy any necessary config files
+COPY --from=builder /app/configs ./configs
+
+# Expose port
+EXPOSE 8084
+
+# Run the application
+CMD ["./amazon-scraper"]

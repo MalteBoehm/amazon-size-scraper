@@ -1,0 +1,49 @@
+# Build stage
+FROM golang:1.25-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git
+
+WORKDIR /app
+
+# Copy go mod files from amzon-size-scraper directory
+COPY amzon-size-scraper/go.mod amzon-size-scraper/go.sum ./
+RUN go mod download
+
+# Copy source code from amzon-size-scraper directory
+COPY amzon-size-scraper/ .
+
+# Build both binaries
+RUN go build -o batch-enricher cmd/batch-enricher/main.go
+RUN go build -o batch-enricher-service cmd/batch-enricher-service/main.go
+
+# Runtime stage
+FROM alpine:latest
+
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates tzdata
+
+WORKDIR /app
+
+# Copy binaries from builder
+COPY --from=builder /app/batch-enricher ./bin/batch-enricher
+COPY --from=builder /app/batch-enricher-service ./batch-enricher-service
+
+# Create non-root user
+RUN addgroup -g 1000 -S enricher && \
+    adduser -u 1000 -S enricher -G enricher
+
+# Change ownership
+RUN chown -R enricher:enricher /app
+
+USER enricher
+
+# Default environment variables
+ENV ENRICHMENT_CHECK_INTERVAL=3m \
+    ENRICHMENT_BATCH_SIZE=10 \
+    ENRICHMENT_ENABLED=true \
+    LOG_LEVEL=info \
+    LOG_FORMAT=json
+
+# Run the service
+CMD ["./batch-enricher-service"]

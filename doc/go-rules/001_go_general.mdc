@@ -1,0 +1,48 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+---
+description: 
+globs: *.go,go.*,air.toml
+alwaysApply: false
+---
+# Go General Guidelines
+
+## Configuration
+
+- Use command-line flags (`flag` package) for runtime configuration (e.g., network address, DSN, SMTP settings, rate limiter settings, trusted CORS origins, JWT secret).
+- Define sensible default flag values suitable for development. Use empty strings or zero values for secrets/DSNs that should be provided externally.
+- Parse flags early in the `main()` function using `flag.Parse()`. Check for specific flags like `-version` immediately after parsing.
+- Provide help text for flags using the third argument of flag definition functions.
+- Prefer passing environment variables as flag values (e.g., via Makefile or `.envrc`) rather than reading them directly with `os.Getenv()` to leverage flag package features (defaults, help text, type conversion). Use `os.Getenv()` within `main()` only to fetch the *default* value for a flag if appropriate.
+- Use `flag.Func()` for complex flag types like space-separated lists (e.g., trusted CORS origins).
+
+## Logging
+
+- Use the structured logging package `log/slog`.
+- Initialize a structured logger in `main()` (e.g., `slog.New(slog.NewTextHandler(os.Stdout, nil))`) and inject it as a dependency via the `application` struct.
+- Log errors returned by critical functions (e.g., `app.serve()`, `sql.Open()`, `mailer.New()`) in `main()` before exiting (`os.Exit(1)`).
+- Use appropriate log levels (Info, Error, Debug).
+- Include relevant context (request method, URI, user ID if available) in error logs within handlers and middleware.
+- Create a specific `logError()` helper method on `application` for consistent error logging format.
+- Configure `http.Server.ErrorLog` to use the structured logger via `slog.NewLogLogger(logger.Handler(), slog.LevelError)`.
+
+## Dependency Injection
+
+- Define an `application` struct in `cmd/api/main.go` (or `cmd/web/main.go`) to hold application-wide dependencies (config, logger, models, mailer, template cache if applicable, WaitGroup).
+- Initialize dependencies in `main()` and inject them into the `application` struct instance.
+- Define handlers and helpers as methods on the `*application` struct to access dependencies.
+- Use interfaces (e.g., `UserModelInterface`) in the `application` struct for dependencies that need mocking, although direct struct types are often sufficient for internal models.
+- Group related database models under a single `Models` struct within the `application` struct for organization (e.g., `app.models.Movies`, `app.models.Users`, `app.models.Tokens`, `app.models.Permissions`).
+
+## Application Lifecycle
+
+- Implement graceful shutdown logic.
+- Use `signal.Notify` in a background goroutine to listen for `syscall.SIGINT` and `syscall.SIGTERM`.
+- Use `http.Server.Shutdown()` with a timeout context (`context.WithTimeout`) to allow in-flight requests to complete.
+- Handle the `http.ErrServerClosed` error from `ListenAndServe` or `ListenAndServeTLS` as a non-error during graceful shutdown.
+- Use `sync.WaitGroup` to coordinate the shutdown of background tasks (like email sending) before the application fully exits. Increment the WaitGroup counter before launching a background task and decrement it (using `defer wg.Done()`) when the task completes. Call `wg.Wait()` during graceful shutdown.
+- Create a `background()` helper method on `application` to encapsulate launching goroutines with panic recovery and WaitGroup management.

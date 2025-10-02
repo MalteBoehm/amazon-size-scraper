@@ -1,0 +1,33 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+description: Richtlinien für Tests in Go-Projekten
+globs: **/*_test.go
+alwaysApply: false
+---
+
+# Testing
+
+- Write tests in `*_test.go` files.
+- Use the `testing` package.
+- Test function names must start with `Test`.
+- Use table-driven tests with slices of anonymous structs for multiple test cases.
+- Use `t.Run()` to create sub-tests for better organization and reporting.
+- Use `t.Errorf()` to report failures without stopping, `t.Fatalf()` to report failures and stop the current test/sub-test.
+- Use `t.Helper()` in test helper functions to ensure correct line number reporting on failures.
+- Create assertion helpers (e.g., `assert.Equal`, `assert.StringContains`, `assert.NilError`, `assert.ErrorIs`) in an `internal/assert` package.
+- Use `net/http/httptest` for testing handlers and middleware.
+- Use `httptest.ResponseRecorder` for unit testing handlers/middleware in isolation. Create a minimal `application` struct with mocked dependencies for these tests.
+- Use `httptest.NewServer` for end-to-end tests that require a running server instance (but can still use mocked dependencies like the database).
+- Always use the test server's client (`ts.Client()`) for requests in end-to-end tests. Configure it appropriately (e.g., disable redirects `CheckRedirect`, manage cookies `cookiejar.New`).
+- Mock dependencies (like database models, mailer) using interfaces where necessary, although direct mocking of structs can work for simpler cases. Create mock implementations (e.g., in `internal/data/mocks`).
+- Use `io.Discard` or a test-specific logger (`slog.New(slog.NewTextHandler(io.Discard, nil))`) for loggers in tests to avoid noisy output.
+- Create integration tests that interact with a real test database.
+- Use setup (`testdata/setup.sql`) and teardown (`testdata/teardown.sql`) scripts executed via helper functions for integration tests.
+- Use `t.Cleanup()` to register teardown logic (like truncating tables) for integration tests.
+- Use `testing.Short()` and `t.Skip()` to optionally skip long-running integration tests (e.g., `go test -short`).
+- Run tests with flags like `-v`, `-run TestSpecificHandler`, `-cover`, `-coverprofile=coverage.out`, `-race`.
+- Test error paths and validation logic thoroughly.
+- Test middleware behavior, including authentication and authorization checks.

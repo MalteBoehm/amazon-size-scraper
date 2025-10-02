@@ -1,0 +1,35 @@
+---
+description: 
+globs: **/cmd/api/middleware.go,**/cmd/api/main.go,**/cmd/api/errors.go
+alwaysApply: false
+---
+# Rate Limi---
+description: Richtlinien für die Implementierung von Ratenbegrenzung (Rate Limiting) in Go APIs
+globs:
+  - "**/cmd/api/middleware.go"
+  - "**/cmd/api/main.go" # For configuration
+  - "**/cmd/api/errors.go" # For error responses
+alwaysApply: false
+---ting
+
+- Use the `golang.org/x/time/rate` package for token-bucket rate limiting.
+- Implement rate limiting as middleware (`rateLimit`).
+- For global rate limiting:
+    - Initialize a single `rate.Limiter` instance (e.g., `rate.NewLimiter(rate.Limit(2), 4)` for 2 requests/sec, burst of 4) when the middleware is first wrapped.
+    - In the middleware handler, call `limiter.Allow()`. If it returns `false`, call `app.rateLimitExceededResponse()` (sends 429 Too Many Requests) and return.
+- For per-client (IP-based) rate limiting:
+    - Use a map to store limiters per client IP: `clients := make(map[string]*rate.Limiter)` (or a custom struct holding the limiter and last seen time).
+    - Use a `sync.Mutex` to protect concurrent access to the client map.
+    - In the middleware handler:
+        - Get the client's real IP address (use `realip.FromRequest()` to check `X-Forwarded-For`/`X-Real-IP` headers first, falling back to `r.RemoteAddr`).
+        - Acquire the mutex lock (`mu.Lock()`).
+        - Check if an entry exists for the IP in the map. If not, create a new `rate.Limiter` and add it to the map.
+        - Update the last seen time for the client IP (if tracking for cleanup).
+        - Call `clients[ip].Allow()` on the client's specific limiter.
+        - If `Allow()` returns `false`, unlock the mutex, call `app.rateLimitExceededResponse()`, and return.
+        - **Crucially, unlock the mutex (`mu.Unlock()`) *before* calling `next.ServeHTTP()`**. Do not use `defer mu.Unlock()`.
+    - Implement a background goroutine (launched once when middleware is initialized) to periodically iterate through the client map (with the mutex locked), remove entries that haven't been seen recently (e.g., in the last 3 minutes), and then unlock the mutex.
+- Make rate limiter settings (RPS, burst size, enabled status) configurable via command-line flags in the `config` struct.
+- Check the `config.limiter.enabled` flag at the start of the middleware and bypass limiting if disabled.
+- Use the configured RPS and burst values when creating new `rate.Limiter` instances.
+- Place the rate limiting middleware after panic recovery but before authentication in the chain.

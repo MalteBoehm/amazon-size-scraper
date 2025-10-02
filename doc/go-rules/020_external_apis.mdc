@@ -1,0 +1,586 @@
+# Rule: External API Integration
+
+Implement robust patterns for integrating with external APIs like Amazon PA-API, Oxylabs, and OpenRouter.
+
+## Client Configuration
+
+Configure HTTP clients with appropriate settings:
+
+```go
+// Rule: Create configurable API clients
+type APIClientConfig struct {
+    BaseURL          string
+    APIKey           string
+    APISecret        string
+    Timeout          time.Duration
+    MaxRetries       int
+    RetryWaitMin     time.Duration
+    RetryWaitMax     time.Duration
+    RateLimitPerSec  float64
+    MaxConnsPerHost  int
+    IdleConnTimeout  time.Duration
+}
+
+type APIClient struct {
+    config     APIClientConfig
+    httpClient *http.Client
+    limiter    *rate.Limiter
+    logger     *slog.Logger
+}
+
+func NewAPIClient(config APIClientConfig, logger *slog.Logger) *APIClient {
+    // Configure transport
+    transport := &http.Transport{
+        MaxIdleConns:        100,
+        MaxIdleConnsPerHost: config.MaxConnsPerHost,
+        IdleConnTimeout:     config.IdleConnTimeout,
+        DisableCompression:  false,
+        DisableKeepAlives:   false,
+        TLSHandshakeTimeout: 10 * time.Second,
+    }
+    
+    // Create HTTP client
+    httpClient := &http.Client{
+        Timeout:   config.Timeout,
+        Transport: transport,
+    }
+    
+    // Create rate limiter
+    limiter := rate.NewLimiter(rate.Limit(config.RateLimitPerSec), int(config.RateLimitPerSec))
+    
+    return &APIClient{
+        config:     config,
+        httpClient: httpClient,
+        limiter:    limiter,
+        logger:     logger,
+    }
+}
+```
+
+## Request Authentication
+
+Handle various authentication methods:
+
+```go
+// Rule: Implement flexible authentication
+type Authenticator interface {
+    Authenticate(req *http.Request) error
+}
+
+// Bearer token authentication
+type BearerTokenAuth struct {
+    token string
+}
+
+func (a *BearerTokenAuth) Authenticate(req *http.Request) error {
+    req.Header.Set("Authorization", "Bearer "+a.token)
+    return nil
+}
+
+// API key authentication
+type APIKeyAuth struct {
+    key    string
+    header string
+}
+
+func (a *APIKeyAuth) Authenticate(req *http.Request) error {
+    req.Header.Set(a.header, a.key)
+    return nil
+}
+
+// AWS Signature V4 authentication (for Amazon PA-API)
+type AWSSignatureAuth struct {
+    accessKey string
+    secretKey string
+    region    string
+    service   string
+}
+
+func (a *AWSSignatureAuth) Authenticate(req *http.Request) error {
+    // Sign request with AWS Signature V4
+    signer := v4.NewSigner(credentials.NewStaticCredentials(
+        a.accessKey,
+        a.secretKey,
+        "",
+    ))
+    
+    _, err := signer.Sign(req, nil, a.service, a.region, time.Now())
+    return err
+}
+
+// Basic authentication (for Oxylabs)
+type BasicAuth struct {
+    username string
+    password string
+}
+
+func (a *BasicAuth) Authenticate(req *http.Request) error {
+    req.SetBasicAuth(a.username, a.password)
+    return nil
+}
+```
+
+## Retry Logic
+
+Implement smart retry logic with exponential backoff:
+
+```go
+// Rule: Implement intelligent retry logic
+type RetryableError struct {
+    Err           error
+    RetryAfter    time.Duration
+    ShouldRetry   bool
+}
+
+func (c *APIClient) doWithRetry(ctx context.Context, req *http.Request) (*http.Response, error) {
+    var resp *http.Response
+    var err error
+    
+    backoff := c.config.RetryWaitMin
+    
+    for attempt := 0; attempt <= c.config.MaxRetries; attempt++ {
+        // Wait if not first attempt
+        if attempt > 0 {
+            select {
+            case <-time.After(backoff):
+            case <-ctx.Done():
+                return nil, ctx.Err()
+            }
+            
+            // Exponential backoff with jitter
+            backoff = time.Duration(float64(backoff) * (1.5 + rand.Float64()*0.5))
+            if backoff > c.config.RetryWaitMax {
+                backoff = c.config.RetryWaitMax
+            }
+        }
+        
+        // Clone request for retry
+        reqClone := req.Clone(ctx)
+        
+        // Apply rate limiting
+        if err := c.limiter.Wait(ctx); err != nil {
+            return nil, fmt.Errorf("rate limit wait: %w", err)
+        }
+        
+        // Make request
+        resp, err = c.httpClient.Do(reqClone)
+        if err != nil {
+            // Network errors are retryable
+            if isNetworkError(err) && attempt < c.config.MaxRetries {
+                c.logger.Warn("network error, retrying",
+                    "attempt", attempt+1,
+                    "error", err,
+                )
+                continue
+            }
+            return nil, err
+        }
+        
+        // Check if response is retryable
+        if shouldRetry, retryAfter := isRetryableResponse(resp); shouldRetry && attempt < c.config.MaxRetries {
+            c.logger.Warn("retryable response",
+                "attempt", attempt+1,
+                "status", resp.StatusCode,
+                "retry_after", retryAfter,
+            )
+            
+            // Use Retry-After header if provided
+            if retryAfter > 0 {
+                backoff = retryAfter
+            }
+            
+            resp.Body.Close()
+            continue
+        }
+        
+        // Success or non-retryable error
+        break
+    }
+    
+    return resp, err
+}
+
+// Rule: Determine if response is retryable
+func isRetryableResponse(resp *http.Response) (bool, time.Duration) {
+    // Rate limiting
+    if resp.StatusCode == 429 {
+        if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+            if seconds, err := strconv.Atoi(retryAfter); err == nil {
+                return true, time.Duration(seconds) * time.Second
+            }
+        }
+        return true, 0
+    }
+    
+    // Server errors
+    if resp.StatusCode >= 500 {
+        return true, 0
+    }
+    
+    // Request timeout
+    if resp.StatusCode == 408 {
+        return true, 0
+    }
+    
+    return false, 0
+}
+```
+
+## Response Caching
+
+Implement intelligent caching for API responses:
+
+```go
+// Rule: Cache API responses appropriately
+type CachedAPIClient struct {
+    *APIClient
+    cache CacheInterface
+}
+
+type CacheEntry struct {
+    Data      []byte
+    ETag      string
+    ExpiresAt time.Time
+}
+
+func (c *CachedAPIClient) Get(ctx context.Context, endpoint string, params url.Values) ([]byte, error) {
+    // Generate cache key
+    cacheKey := fmt.Sprintf("%s?%s", endpoint, params.Encode())
+    
+    // Check cache
+    if entry, found := c.getFromCache(ctx, cacheKey); found {
+        // Validate with ETag if available
+        if entry.ETag != "" {
+            if valid := c.validateETag(ctx, endpoint, params, entry.ETag); valid {
+                c.logger.Debug("cache hit with valid ETag", "endpoint", endpoint)
+                return entry.Data, nil
+            }
+        } else if time.Now().Before(entry.ExpiresAt) {
+            c.logger.Debug("cache hit", "endpoint", endpoint)
+            return entry.Data, nil
+        }
+    }
+    
+    // Make API request
+    req, err := http.NewRequestWithContext(ctx, "GET", c.config.BaseURL+endpoint, nil)
+    if err != nil {
+        return nil, err
+    }
+    req.URL.RawQuery = params.Encode()
+    
+    resp, err := c.doWithRetry(ctx, req)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    data, err := io.ReadAll(resp.Body)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Cache response
+    entry := CacheEntry{
+        Data:      data,
+        ETag:      resp.Header.Get("ETag"),
+        ExpiresAt: calculateExpiry(resp),
+    }
+    c.setCache(ctx, cacheKey, entry)
+    
+    return data, nil
+}
+
+// Rule: Calculate cache expiry from response headers
+func calculateExpiry(resp *http.Response) time.Time {
+    // Check Cache-Control header
+    if cc := resp.Header.Get("Cache-Control"); cc != "" {
+        if maxAge := parseMaxAge(cc); maxAge > 0 {
+            return time.Now().Add(time.Duration(maxAge) * time.Second)
+        }
+    }
+    
+    // Check Expires header
+    if expires := resp.Header.Get("Expires"); expires != "" {
+        if t, err := http.ParseTime(expires); err == nil {
+            return t
+        }
+    }
+    
+    // Default cache duration
+    return time.Now().Add(5 * time.Minute)
+}
+```
+
+## Error Handling
+
+Handle API-specific errors appropriately:
+
+```go
+// Rule: Create typed errors for API responses
+type APIError struct {
+    StatusCode int
+    Message    string
+    RequestID  string
+    Details    map[string]interface{}
+}
+
+func (e *APIError) Error() string {
+    return fmt.Sprintf("API error %d: %s (request_id: %s)", e.StatusCode, e.Message, e.RequestID)
+}
+
+// Rule: Parse error responses
+func parseErrorResponse(resp *http.Response) error {
+    var apiErr APIError
+    apiErr.StatusCode = resp.StatusCode
+    apiErr.RequestID = resp.Header.Get("X-Request-ID")
+    
+    body, err := io.ReadAll(resp.Body)
+    if err != nil {
+        apiErr.Message = "failed to read error response"
+        return &apiErr
+    }
+    
+    // Try to parse JSON error
+    var jsonErr struct {
+        Error   string                 `json:"error"`
+        Message string                 `json:"message"`
+        Details map[string]interface{} `json:"details"`
+    }
+    
+    if err := json.Unmarshal(body, &jsonErr); err == nil {
+        apiErr.Message = firstNonEmpty(jsonErr.Error, jsonErr.Message)
+        apiErr.Details = jsonErr.Details
+    } else {
+        apiErr.Message = string(body)
+    }
+    
+    return &apiErr
+}
+
+// Rule: Implement fallback strategies
+type FallbackStrategy interface {
+    Execute(ctx context.Context, err error) (interface{}, error)
+}
+
+type CacheFallback struct {
+    cache CacheInterface
+}
+
+func (f *CacheFallback) Execute(ctx context.Context, err error) (interface{}, error) {
+    // Return stale data from cache if available
+    if cachedData, found := f.cache.GetStale(ctx, "last_known_good"); found {
+        return cachedData, nil
+    }
+    return nil, err
+}
+```
+
+## API Client Example
+
+Complete example for Amazon PA-API client:
+
+```go
+// Rule: Implement specific API clients
+type AmazonPAAPIClient struct {
+    *APIClient
+    partnerTag string
+    marketplace string
+}
+
+func NewAmazonPAAPIClient(config AmazonConfig, logger *slog.Logger) *AmazonPAAPIClient {
+    apiConfig := APIClientConfig{
+        BaseURL:         "https://webservices.amazon.com/paapi5",
+        Timeout:         30 * time.Second,
+        MaxRetries:      3,
+        RetryWaitMin:    1 * time.Second,
+        RetryWaitMax:    30 * time.Second,
+        RateLimitPerSec: 1, // PA-API limit
+    }
+    
+    client := &AmazonPAAPIClient{
+        APIClient:   NewAPIClient(apiConfig, logger),
+        partnerTag:  config.PartnerTag,
+        marketplace: config.Marketplace,
+    }
+    
+    // Set authenticator
+    client.authenticator = &AWSSignatureAuth{
+        accessKey: config.AccessKey,
+        secretKey: config.SecretKey,
+        region:    config.Region,
+        service:   "ProductAdvertisingAPI",
+    }
+    
+    return client
+}
+
+func (c *AmazonPAAPIClient) GetItem(ctx context.Context, asin string) (*Product, error) {
+    // Build request
+    payload := map[string]interface{}{
+        "ItemIds":        []string{asin},
+        "PartnerTag":     c.partnerTag,
+        "PartnerType":    "Associates",
+        "Marketplace":    c.marketplace,
+        "Resources": []string{
+            "ItemInfo.Title",
+            "ItemInfo.Features",
+            "ItemInfo.ProductInfo",
+            "Images.Primary.Large",
+            "Offers.Listings.Price",
+        },
+    }
+    
+    body, err := json.Marshal(payload)
+    if err != nil {
+        return nil, err
+    }
+    
+    req, err := http.NewRequestWithContext(ctx, "POST", c.config.BaseURL+"/getitems", bytes.NewReader(body))
+    if err != nil {
+        return nil, err
+    }
+    
+    req.Header.Set("Content-Type", "application/json")
+    req.Header.Set("X-Amz-Target", "com.amazon.paapi5.v1.ProductAdvertisingAPIv1.GetItems")
+    
+    // Authenticate request
+    if err := c.authenticator.Authenticate(req); err != nil {
+        return nil, err
+    }
+    
+    // Make request with retry
+    resp, err := c.doWithRetry(ctx, req)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    if resp.StatusCode != http.StatusOK {
+        return nil, parseErrorResponse(resp)
+    }
+    
+    // Parse response
+    var result struct {
+        ItemsResult struct {
+            Items []struct {
+                ASIN       string
+                ItemInfo   ItemInfo
+                Images     Images
+                Offers     Offers
+            }
+        }
+    }
+    
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return nil, err
+    }
+    
+    if len(result.ItemsResult.Items) == 0 {
+        return nil, &APIError{StatusCode: 404, Message: "item not found"}
+    }
+    
+    item := result.ItemsResult.Items[0]
+    return &Product{
+        ASIN:  item.ASIN,
+        Title: item.ItemInfo.Title.DisplayValue,
+        // ... map other fields
+    }, nil
+}
+```
+
+## Mock Client for Testing
+
+Create mock clients for testing:
+
+```go
+// Rule: Provide mock implementations
+type MockAPIClient struct {
+    responses map[string]MockResponse
+    calls     []MockCall
+    mu        sync.Mutex
+}
+
+type MockResponse struct {
+    StatusCode int
+    Body       []byte
+    Headers    map[string]string
+    Error      error
+}
+
+type MockCall struct {
+    Method   string
+    Endpoint string
+    Time     time.Time
+}
+
+func (m *MockAPIClient) Do(req *http.Request) (*http.Response, error) {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+    
+    // Record call
+    m.calls = append(m.calls, MockCall{
+        Method:   req.Method,
+        Endpoint: req.URL.Path,
+        Time:     time.Now(),
+    })
+    
+    // Get mock response
+    key := fmt.Sprintf("%s:%s", req.Method, req.URL.Path)
+    resp, ok := m.responses[key]
+    if !ok {
+        return nil, fmt.Errorf("no mock response for %s", key)
+    }
+    
+    if resp.Error != nil {
+        return nil, resp.Error
+    }
+    
+    // Build response
+    httpResp := &http.Response{
+        StatusCode: resp.StatusCode,
+        Body:       io.NopCloser(bytes.NewReader(resp.Body)),
+        Header:     make(http.Header),
+    }
+    
+    for k, v := range resp.Headers {
+        httpResp.Header.Set(k, v)
+    }
+    
+    return httpResp, nil
+}
+
+// Rule: Test with various scenarios
+func TestAPIClient_GetItem(t *testing.T) {
+    mockClient := &MockAPIClient{
+        responses: map[string]MockResponse{
+            "POST:/getitems": {
+                StatusCode: 200,
+                Body:       []byte(`{"ItemsResult":{"Items":[{"ASIN":"B123"}]}}`),
+            },
+        },
+    }
+    
+    client := &AmazonPAAPIClient{
+        APIClient: &APIClient{httpClient: mockClient},
+    }
+    
+    product, err := client.GetItem(context.Background(), "B123")
+    assert.NoError(t, err)
+    assert.Equal(t, "B123", product.ASIN)
+    
+    // Verify calls
+    assert.Len(t, mockClient.calls, 1)
+    assert.Equal(t, "POST", mockClient.calls[0].Method)
+}
+```
+
+## Best Practices
+
+1. **Rate Limiting**: Always respect API rate limits
+2. **Timeouts**: Set appropriate timeouts for all requests
+3. **Retries**: Implement exponential backoff with jitter
+4. **Caching**: Cache responses when appropriate
+5. **Error Handling**: Handle API-specific errors gracefully
+6. **Monitoring**: Track API usage and error rates
+7. **Testing**: Use mock clients for unit tests
+8. **Documentation**: Document rate limits and quotas

@@ -1,0 +1,42 @@
+---
+description: 
+globs: **/cmd/api/middleware.go,**/cmd/api/main.go,**/cmd/api/routes.go
+alwaysApply: false
+---
+---
+description: Richtlinien für das Erfassen und Bereitstellen von Anwendungsmetriken mit expvar in Go
+globs:
+  - "**/cmd/api/middleware.go"
+  - "**/cmd/api/main.go" # For publishing metrics
+  - "**/cmd/api/routes.go" # For exposing /debug/vars
+alwaysApply: false
+---
+
+Application on Metrics (`expvar`)
+
+- Use the `expvar` package to expose application metrics.
+- Register the `expvar.Handler()` at a specific endpoint, conventionally `/debug/vars` (e.g., `router.Handler(http.MethodGet, "/debug/vars", expvar.Handler())`).
+- Protect the metrics endpoint in production (e.g., restrict access via reverse proxy configuration, require authentication/authorization, or use HTTP Basic Auth). Do not expose sensitive metrics (like DSNs in `cmdline`) publicly.
+- Default exposed variables:
+    - `cmdline`: Command-line arguments used to start the application.
+    - `memstats`: Snapshot of memory usage from `runtime.MemStats()`.
+- Publish custom metrics:
+    - For simple counters/values: Use `expvar.NewInt()`, `expvar.NewFloat()`, `expvar.NewString()`, `expvar.NewMap()`. These return a pointer to the expvar type. Use the `Set()` or `Add()` methods to update values. These types are safe for concurrent use.
+    - For dynamically calculated metrics: Use `expvar.Publish("name", expvar.Func(func() any { ... }))`. The returned value from the function must be JSON-encodable. Examples: `runtime.NumGoroutine()`, `db.Stats()`.
+- Implement a `metrics()` middleware placed at the *start* of the chain:
+    - Initialize expvar variables (like `totalRequestsReceived`, `totalResponsesSent`, `totalProcessingTimeMicroseconds`, `totalResponsesSentByStatus`) *outside* the returned handler func so they are created only once.
+    - In the handler func:
+        - Increment `totalRequestsReceived`.
+        - Record the start time (`time.Now()`).
+        - Create a custom `metricsResponseWriter` that wraps the original `http.ResponseWriter`.
+        - Call `next.ServeHTTP()` with the wrapped writer.
+        - Increment `totalResponsesSent`.
+        - Calculate the duration (`time.Since(start).Microseconds()`) and add it to `totalProcessingTimeMicroseconds`.
+        - Get the status code from the `metricsResponseWriter` and increment the count for that status code in the `totalResponsesSentByStatus` map (convert status code to string using `strconv.Itoa`).
+- Create a `metricsResponseWriter` struct:
+    - Embed or wrap `http.ResponseWriter`.
+    - Add fields to store `statusCode` (defaulting to `http.StatusOK`) and `headerWritten bool`.
+    - Implement `Header()`, `WriteHeader()`, and `Write()` methods satisfying `http.ResponseWriter`.
+    - Override `WriteHeader()`: Call the wrapped writer's `WriteHeader`, then record the `statusCode` and set `headerWritten = true`.
+    - Override `Write()`: Set `headerWritten = true` before calling the wrapped writer's `Write()`.
+    - Implement `Unwrap() http.ResponseWriter` to return the original wrapped writer (for Go 1.20+ ResponseController compatibility).

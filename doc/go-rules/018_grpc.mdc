@@ -1,0 +1,485 @@
+# Rule: gRPC Service Implementation
+
+Implement gRPC services with proper error handling, interceptors, and protocol buffer best practices.
+
+## Protocol Buffer Organization
+
+Structure proto files by domain and version:
+
+```protobuf
+// Rule: Use semantic versioning in package names
+syntax = "proto3";
+
+package tallaffiliate.product.v1;
+option go_package = "github.com/maltedev/tall-affiliate/api/proto/product/v1;productv1";
+
+// Rule: Import common types
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/field_mask.proto";
+import "common/v1/pagination.proto";
+
+// Rule: Use clear service naming
+service ProductService {
+  // Rule: Use standard REST-like method names
+  rpc GetProduct(GetProductRequest) returns (GetProductResponse);
+  rpc ListProducts(ListProductsRequest) returns (ListProductsResponse);
+  rpc CreateProduct(CreateProductRequest) returns (CreateProductResponse);
+  rpc UpdateProduct(UpdateProductRequest) returns (UpdateProductResponse);
+  rpc DeleteProduct(DeleteProductRequest) returns (DeleteProductResponse);
+  
+  // Rule: Use streaming for bulk operations
+  rpc StreamProducts(StreamProductsRequest) returns (stream Product);
+}
+```
+
+## Message Design
+
+Design messages with evolution in mind:
+
+```protobuf
+// Rule: Use wrapper messages for requests/responses
+message GetProductRequest {
+  string product_id = 1;
+  // Rule: Reserve fields for future use
+  reserved 2 to 10;
+}
+
+message GetProductResponse {
+  Product product = 1;
+}
+
+// Rule: Design messages for reusability
+message Product {
+  string id = 1;
+  string asin = 2;
+  string title = 3;
+  
+  // Rule: Use well-known types
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  
+  // Rule: Group related fields
+  message Dimensions {
+    double height_cm = 1;
+    double length_cm = 2;
+    double width_cm = 3;
+  }
+  Dimensions dimensions = 6;
+  
+  // Rule: Use enums for fixed values
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_ACTIVE = 1;
+    STATUS_INACTIVE = 2;
+    STATUS_PENDING = 3;
+  }
+  Status status = 7;
+  
+  // Rule: Use field_mask for partial updates
+  // Rule: Mark deprecated fields clearly
+  string old_field = 8 [deprecated = true];
+}
+```
+
+## Server Implementation
+
+Implement gRPC servers with proper patterns:
+
+```go
+// Rule: Embed UnimplementedServiceServer for forward compatibility
+type productServer struct {
+    productv1.UnimplementedProductServiceServer
+    db     *sql.DB
+    logger *slog.Logger
+    cache  CacheInterface
+}
+
+// Rule: Use context for cancellation and metadata
+func (s *productServer) GetProduct(ctx context.Context, req *productv1.GetProductRequest) (*productv1.GetProductResponse, error) {
+    // Rule: Validate input
+    if err := validateGetProductRequest(req); err != nil {
+        return nil, status.Errorf(codes.InvalidArgument, "invalid request: %v", err)
+    }
+    
+    // Rule: Extract metadata
+    md, ok := metadata.FromIncomingContext(ctx)
+    if ok {
+        traceID := md.Get("trace-id")
+        s.logger.Debug("handling GetProduct", "product_id", req.ProductId, "trace_id", traceID)
+    }
+    
+    // Business logic
+    product, err := s.getProductFromDB(ctx, req.ProductId)
+    if err != nil {
+        if errors.Is(err, sql.ErrNoRows) {
+            return nil, status.Errorf(codes.NotFound, "product not found: %s", req.ProductId)
+        }
+        s.logger.Error("database error", "error", err)
+        return nil, status.Error(codes.Internal, "internal error")
+    }
+    
+    return &productv1.GetProductResponse{
+        Product: toProtoProduct(product),
+    }, nil
+}
+```
+
+## Error Handling
+
+Map errors to proper gRPC status codes:
+
+```go
+// Rule: Create domain-specific error mapping
+func toGRPCError(err error) error {
+    if err == nil {
+        return nil
+    }
+    
+    // Check for context errors
+    switch err {
+    case context.Canceled:
+        return status.Error(codes.Canceled, "request canceled")
+    case context.DeadlineExceeded:
+        return status.Error(codes.DeadlineExceeded, "deadline exceeded")
+    }
+    
+    // Check for domain errors
+    var validationErr *ValidationError
+    if errors.As(err, &validationErr) {
+        return status.Errorf(codes.InvalidArgument, "validation failed: %s", validationErr.Field)
+    }
+    
+    var notFoundErr *NotFoundError
+    if errors.As(err, &notFoundErr) {
+        return status.Errorf(codes.NotFound, "%s not found: %s", notFoundErr.Resource, notFoundErr.ID)
+    }
+    
+    var conflictErr *ConflictError
+    if errors.As(err, &conflictErr) {
+        return status.Errorf(codes.AlreadyExists, "resource already exists: %s", conflictErr.Resource)
+    }
+    
+    // Default to internal error
+    return status.Error(codes.Internal, "internal server error")
+}
+
+// Rule: Include error details for debugging
+func toGRPCErrorWithDetails(err error, details proto.Message) error {
+    st := status.Convert(toGRPCError(err))
+    
+    // Add details if available
+    if details != nil {
+        st, _ = st.WithDetails(details)
+    }
+    
+    return st.Err()
+}
+```
+
+## Interceptors
+
+Implement interceptors for cross-cutting concerns:
+
+```go
+// Rule: Use interceptors for logging, auth, monitoring
+func UnaryServerInterceptor(logger *slog.Logger) grpc.UnaryServerInterceptor {
+    return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+        start := time.Now()
+        
+        // Extract metadata
+        md, _ := metadata.FromIncomingContext(ctx)
+        traceID := md.Get("trace-id")
+        if len(traceID) == 0 {
+            traceID = []string{generateTraceID()}
+            ctx = metadata.NewIncomingContext(ctx, metadata.Pairs("trace-id", traceID[0]))
+        }
+        
+        // Log request
+        logger.Info("grpc request started",
+            "method", info.FullMethod,
+            "trace_id", traceID[0],
+        )
+        
+        // Handle request
+        resp, err := handler(ctx, req)
+        
+        // Log response
+        code := codes.OK
+        if err != nil {
+            code = status.Code(err)
+        }
+        
+        logger.Info("grpc request completed",
+            "method", info.FullMethod,
+            "trace_id", traceID[0],
+            "code", code.String(),
+            "duration_ms", time.Since(start).Milliseconds(),
+        )
+        
+        return resp, err
+    }
+}
+
+// Rule: Implement auth interceptor
+func AuthInterceptor(authService AuthService) grpc.UnaryServerInterceptor {
+    return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+        // Skip auth for specific methods
+        if isPublicMethod(info.FullMethod) {
+            return handler(ctx, req)
+        }
+        
+        // Extract token from metadata
+        md, ok := metadata.FromIncomingContext(ctx)
+        if !ok {
+            return nil, status.Error(codes.Unauthenticated, "missing metadata")
+        }
+        
+        tokens := md.Get("authorization")
+        if len(tokens) == 0 {
+            return nil, status.Error(codes.Unauthenticated, "missing authorization token")
+        }
+        
+        // Validate token
+        userID, err := authService.ValidateToken(ctx, tokens[0])
+        if err != nil {
+            return nil, status.Error(codes.Unauthenticated, "invalid token")
+        }
+        
+        // Add user to context
+        ctx = context.WithValue(ctx, userIDKey, userID)
+        
+        return handler(ctx, req)
+    }
+}
+```
+
+## Streaming
+
+Implement streaming endpoints properly:
+
+```go
+// Rule: Use server streaming for large result sets
+func (s *productServer) StreamProducts(req *productv1.StreamProductsRequest, stream productv1.ProductService_StreamProductsServer) error {
+    // Set up cursor-based pagination
+    cursor := req.Cursor
+    pageSize := int(req.PageSize)
+    if pageSize == 0 {
+        pageSize = 100
+    }
+    
+    for {
+        // Fetch batch
+        products, nextCursor, err := s.getProductBatch(stream.Context(), cursor, pageSize)
+        if err != nil {
+            return toGRPCError(err)
+        }
+        
+        // Stream products
+        for _, product := range products {
+            if err := stream.Send(product); err != nil {
+                return err
+            }
+        }
+        
+        // Check if done
+        if nextCursor == "" {
+            break
+        }
+        cursor = nextCursor
+        
+        // Check for cancellation
+        if stream.Context().Err() != nil {
+            return status.Error(codes.Canceled, "stream canceled")
+        }
+    }
+    
+    return nil
+}
+
+// Rule: Use bidirectional streaming for real-time communication
+func (s *productServer) SyncProducts(stream productv1.ProductService_SyncProductsServer) error {
+    for {
+        req, err := stream.Recv()
+        if err == io.EOF {
+            return nil
+        }
+        if err != nil {
+            return err
+        }
+        
+        // Process request
+        resp, err := s.processSyncRequest(stream.Context(), req)
+        if err != nil {
+            return toGRPCError(err)
+        }
+        
+        // Send response
+        if err := stream.Send(resp); err != nil {
+            return err
+        }
+    }
+}
+```
+
+## Client Implementation
+
+Implement gRPC clients with proper patterns:
+
+```go
+// Rule: Create reusable client wrapper
+type ProductClient struct {
+    conn   *grpc.ClientConn
+    client productv1.ProductServiceClient
+    logger *slog.Logger
+}
+
+func NewProductClient(addr string, logger *slog.Logger) (*ProductClient, error) {
+    // Rule: Configure connection options
+    opts := []grpc.DialOption{
+        grpc.WithTransportCredentials(insecure.NewCredentials()), // Use TLS in production
+        grpc.WithUnaryInterceptor(clientUnaryInterceptor(logger)),
+        grpc.WithStreamInterceptor(clientStreamInterceptor(logger)),
+        grpc.WithDefaultCallOptions(
+            grpc.MaxCallRecvMsgSize(10 * 1024 * 1024), // 10MB
+        ),
+    }
+    
+    // Rule: Use context for connection timeout
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+    
+    conn, err := grpc.DialContext(ctx, addr, opts...)
+    if err != nil {
+        return nil, fmt.Errorf("dial gRPC server: %w", err)
+    }
+    
+    return &ProductClient{
+        conn:   conn,
+        client: productv1.NewProductServiceClient(conn),
+        logger: logger,
+    }, nil
+}
+
+// Rule: Add convenience methods with proper timeout
+func (c *ProductClient) GetProduct(ctx context.Context, productID string) (*productv1.Product, error) {
+    // Add timeout if not present
+    if _, ok := ctx.Deadline(); !ok {
+        var cancel context.CancelFunc
+        ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+        defer cancel()
+    }
+    
+    // Add metadata
+    ctx = metadata.AppendToOutgoingContext(ctx,
+        "trace-id", extractTraceID(ctx),
+    )
+    
+    resp, err := c.client.GetProduct(ctx, &productv1.GetProductRequest{
+        ProductId: productID,
+    })
+    if err != nil {
+        return nil, fmt.Errorf("get product: %w", err)
+    }
+    
+    return resp.Product, nil
+}
+
+// Rule: Implement proper cleanup
+func (c *ProductClient) Close() error {
+    return c.conn.Close()
+}
+```
+
+## Testing
+
+Test gRPC services effectively:
+
+```go
+// Rule: Use bufconn for in-memory testing
+func newTestServer(t *testing.T) (productv1.ProductServiceClient, func()) {
+    lis := bufconn.Listen(1024 * 1024)
+    
+    server := grpc.NewServer()
+    productv1.RegisterProductServiceServer(server, &productServer{
+        db:     testDB,
+        logger: testLogger,
+    })
+    
+    go func() {
+        if err := server.Serve(lis); err != nil {
+            t.Fatalf("server failed to serve: %v", err)
+        }
+    }()
+    
+    conn, err := grpc.DialContext(context.Background(), "bufnet",
+        grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+            return lis.Dial()
+        }),
+        grpc.WithTransportCredentials(insecure.NewCredentials()),
+    )
+    if err != nil {
+        t.Fatalf("failed to dial bufnet: %v", err)
+    }
+    
+    cleanup := func() {
+        conn.Close()
+        server.Stop()
+    }
+    
+    return productv1.NewProductServiceClient(conn), cleanup
+}
+
+// Rule: Test with various scenarios
+func TestProductService_GetProduct(t *testing.T) {
+    client, cleanup := newTestServer(t)
+    defer cleanup()
+    
+    tests := []struct {
+        name      string
+        productID string
+        wantErr   codes.Code
+    }{
+        {
+            name:      "valid product",
+            productID: "123",
+            wantErr:   codes.OK,
+        },
+        {
+            name:      "not found",
+            productID: "999",
+            wantErr:   codes.NotFound,
+        },
+        {
+            name:      "invalid id",
+            productID: "",
+            wantErr:   codes.InvalidArgument,
+        },
+    }
+    
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            resp, err := client.GetProduct(context.Background(), &productv1.GetProductRequest{
+                ProductId: tt.productID,
+            })
+            
+            if tt.wantErr != codes.OK {
+                assert.Equal(t, tt.wantErr, status.Code(err))
+                return
+            }
+            
+            assert.NoError(t, err)
+            assert.NotNil(t, resp.Product)
+        })
+    }
+}
+```
+
+## Best Practices
+
+1. **Versioning**: Always version your services and messages
+2. **Field Numbers**: Never reuse field numbers, use reserved for deprecated fields
+3. **Enums**: Always start enums with UNSPECIFIED = 0
+4. **Timeouts**: Set appropriate deadlines for all calls
+5. **Metadata**: Use metadata for cross-cutting concerns, not business data
+6. **Error Details**: Provide structured error details for debugging
+7. **Performance**: Use streaming for large data sets, not large messages

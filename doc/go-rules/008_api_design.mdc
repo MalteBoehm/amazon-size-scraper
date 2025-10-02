@@ -1,0 +1,58 @@
+---
+description: 
+globs: **/cmd/api/*.go,**/internal/data/*.go,**/internal/validator/*.go
+alwaysApply: false
+---
+description: Richtlinien für API-Design, JSON-Verarbeitung und zugehörige Helfer in Go
+globs:
+  - "**/cmd/api/*.go"
+  - "**/internal/data/*.go"
+  - "**/internal/validator/*.go"
+alwaysApply: false
+--- Design & JSON Handling
+
+## General Principles
+
+- Design APIs following RESTful principles where appropriate (use standard HTTP methods GET, POST, PUT, PATCH, DELETE for CRUD operations).
+- Use clear, consistent, and resource-oriented URL paths (e.g., `/v1/movies`, `/v1/movies/:id`).
+- Version APIs using a URL prefix (e.g., `/v1/`).
+- Use JSON for request and response bodies. Set `Content-Type: application/json` on responses.
+
+## JSON Encoding
+
+- Use `encoding/json` package. Prefer `json.Marshal()` or `json.MarshalIndent()` over `json.Encoder` for typical HTTP responses as it allows checking for encoding errors before writing headers/status.
+- Use `json.MarshalIndent()` in development/testing or if human-readability of the raw JSON response is important, but be aware of the performance overhead compared to `json.Marshal()`.
+- Create a reusable `writeJSON()` helper method on `application` to encapsulate JSON encoding, setting headers, and writing the response.
+- Handle potential errors from `json.MarshalIndent()` within the `writeJSON()` helper and return an error or call `serverErrorResponse()`.
+- Use struct tags (`json:"field_name"`) to control JSON key names (e.g., convert Go `CamelCase` to JSON `snake_case`).
+- Use `json:"-"` to omit fields entirely from JSON output (e.g., passwords, internal IDs).
+- Use `json:",omitzero"` (Go 1.24+) to omit fields if they have their Go zero value (0, false, "", nil pointer/interface/slice/map). Use `json:",omitempty"` for older Go versions or specifically to omit *empty* (not just nil) slices/maps.
+- Be aware that non-ASCII punctuation in struct tags is ignored.
+- Implement the `json.Marshaler` interface (`MarshalJSON()`) on custom types (like `data.Runtime`) to control their JSON representation. Use value receivers unless pointer semantics are specifically required. Ensure string values returned by `MarshalJSON` are properly quoted (`strconv.Quote`).
+- Use `json.RawMessage` to embed pre-encoded JSON into a larger JSON structure without re-encoding/escaping. Validate the `RawMessage` content using `json.Valid()` if necessary.
+- Envelope responses where appropriate (e.g., `{"movie": {...}}` or `{"movies": [...], "metadata": {...}}`) for clarity and to mitigate potential JSON array vulnerabilities in older browsers. Define a generic `envelope map[string]any` type.
+
+## JSON Decoding
+
+- Use `encoding/json` package. Prefer `json.Decoder` over `json.Unmarshal` for decoding request bodies as it's more efficient and offers more configuration.
+- Create a reusable `readJSON()` helper method on `application`.
+- Use `http.MaxBytesReader()` *before* decoding to limit request body size and prevent DoS attacks.
+- Use `json.Decoder.DisallowUnknownFields()` to return an error if the request JSON contains fields not present in the target Go struct.
+- Decode into a target struct. Fields must be exported. Pass a *pointer* to the struct to `Decode()`.
+- Handle JSON decoding errors gracefully within `readJSON()`:
+    - Triage specific error types using `errors.As` (`*json.SyntaxError`, `*json.UnmarshalTypeError`, `*http.MaxBytesError`) and `errors.Is` (`io.EOF`, `io.ErrUnexpectedEOF`).
+    - Provide clear, user-friendly error messages indicating the type and location of the error.
+    - Handle the specific case of `json: unknown field "<name>"` when `DisallowUnknownFields` is used.
+    - Check for trailing data after the main JSON object by attempting a second `dec.Decode(&struct{}{})` and checking for `io.EOF`.
+    - Treat `json.InvalidUnmarshalError` (passing a non-pointer to `Decode`) as a panic within `readJSON` as it indicates a programmer error.
+- Use struct tags (`json:"field_name"`) to map incoming JSON keys to struct fields.
+- Implement the `json.Unmarshaler` interface (`UnmarshalJSON([]byte) error`) on custom types to control how they are decoded from JSON. Use a *pointer receiver* for `UnmarshalJSON` as it needs to modify the receiver.
+- For partial updates (PATCH requests), define input structs with pointer fields (`*string`, `*int`) to distinguish between a field explicitly set to its zero value (e.g., `{"title": ""}`) and a field not provided at all (field will be `nil`).
+
+## Query String Parameters
+
+- Access query string parameters via `r.URL.Query()` which returns a `url.Values` (map).
+- Use `qs.Get("key")` to retrieve values as strings (returns `""` if key not present).
+- Create helper functions (`readString`, `readInt`, `readCSV`) on `application` to parse query parameters, provide default values, and integrate with the `validator` package for type/range checks.
+- Define a `Filters` struct (in `internal/data`) to hold pagination (page, page_size) and sorting (sort column, sort direction, sort safelist) parameters. Embed this struct in handler-specific input structs where needed.
+- Implement `ValidateFilters()` function to check pagination/sorting values against sensible limits and safelists.

@@ -1,0 +1,160 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: amazon-scraper-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-amazon_scraper}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    networks:
+      - scraper-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-amazon_scraper}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis for caching and job queues
+  redis:
+    image: redis:7-alpine
+    container_name: amazon-scraper-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - scraper-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  # Size Scraper Application
+  size-scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile.scraper
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    container_name: amazon-scraper
+    environment:
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_NAME: ${DB_NAME:-amazon_scraper}
+
+      # Redis
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+
+      # Scraper Configuration
+      SCRAPER_RATE_LIMIT_MIN: ${SCRAPER_RATE_LIMIT_MIN:-5s}
+      SCRAPER_RATE_LIMIT_MAX: ${SCRAPER_RATE_LIMIT_MAX:-30s}
+      SCRAPER_CONCURRENT_LIMIT: ${SCRAPER_CONCURRENT_LIMIT:-2}
+      SCRAPER_MAX_RETRIES: ${SCRAPER_MAX_RETRIES:-3}
+
+      # Browser Configuration
+      BROWSER_HEADLESS: ${BROWSER_HEADLESS:-true}
+      BROWSER_TIMEOUT: ${BROWSER_TIMEOUT:-30s}
+      BROWSER_VIEWPORT_WIDTH: ${BROWSER_VIEWPORT_WIDTH:-1920}
+      BROWSER_VIEWPORT_HEIGHT: ${BROWSER_VIEWPORT_HEIGHT:-1080}
+      BROWSER_ACCEPT_LANGUAGE: ${BROWSER_ACCEPT_LANGUAGE:-de-DE,de;q=0.9,en;q=0.8}
+      BROWSER_TIMEZONE: ${BROWSER_TIMEZONE:-Europe/Berlin}
+      BROWSER_LOCALE: ${BROWSER_LOCALE:-de-DE}
+
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      DEBUG_MODE: ${DEBUG_MODE:-false}
+      SCRAPER_LOG_HTML: ${SCRAPER_LOG_HTML:-false}
+      SCRAPER_HTML_LOG_DIR: ${SCRAPER_HTML_LOG_DIR:-/app/logs/html}
+
+      # Proxy Configuration
+      USE_PROXIES: ${USE_PROXIES:-false}
+      PROXY_LIST_FILE: ${PROXY_LIST_FILE:-/app/proxy_list}
+
+      # Server Configuration
+      SERVER_HOST: ${SERVER_HOST:-0.0.0.0}
+      SERVER_PORT: ${SERVER_PORT:-8084}
+
+    ports:
+      - "${SERVER_PORT:-8084}:8084"
+    volumes:
+      - ./proxy_list:/app/proxy_list:ro
+      - scraper_logs:/app/logs
+      - /dev/shm:/dev/shm  # Shared memory for Playwright
+    networks:
+      - scraper-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8084/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Lifecycle Consumer for processing events
+  lifecycle-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile.scraper
+    container_name: amazon-scraper-consumer
+    entrypoint: ["/app/lifecycle-consumer"]
+    environment:
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_NAME: ${DB_NAME:-amazon_scraper}
+
+      # Redis
+      REDIS_ADDR: redis:6379
+      REDIS_STREAM: ${REDIS_STREAM:-product:events:stream}
+
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+
+    networks:
+      - scraper-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - consumer
+
+networks:
+  scraper-network:
+    driver: bridge
+    name: amazon-scraper-network
+
+volumes:
+  postgres_data:
+    name: amazon-scraper-postgres-data
+  redis_data:
+    name: amazon-scraper-redis-data
+  scraper_logs:
+    name: amazon-scraper-logs
