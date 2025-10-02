@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   # Size Scraper Application
@@ -11,15 +11,19 @@ services:
     container_name: amazon-scraper
     environment:
       # Database
-      DB_HOST: ${DB_HOST:-postgres}
-      DB_PORT: ${DB_PORT:-5432}
+      DB_HOST: ${DB_HOST:-49.13.49.90}
+      DB_PORT: ${DB_PORT:-5111}
       DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-m5DAUj3AC1VGdLf0bamLSYesXKlYraZgq4e21qHp4NLIrO4t1mLfHI44WkEr0OQL}
       DB_NAME: ${DB_NAME:-tall_affiliate}
+      DB_SSL_MODE: ${DB_SSL_MODE:-disable}
 
       # Redis
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_USERNAME: ${REDIS_USERNAME}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
 
       # Scraper Configuration
       SCRAPER_RATE_LIMIT_MIN: ${SCRAPER_RATE_LIMIT_MIN:-5s}
@@ -44,7 +48,7 @@ services:
       SCRAPER_HTML_LOG_DIR: ${SCRAPER_HTML_LOG_DIR:-/app/logs/html}
 
       # Proxy Configuration
-      USE_PROXIES: ${USE_PROXIES:-false}
+      USE_PROXIES: ${USE_PROXIES:-true}
       PROXY_LIST_FILE: ${PROXY_LIST_FILE:-/app/proxy_list}
 
       # Server Configuration
@@ -56,12 +60,20 @@ services:
     volumes:
       - ./proxy_list:/app/proxy_list:ro
       - scraper_logs:/app/logs
-      - /dev/shm:/dev/shm  # Shared memory for Playwright
+      - /dev/shm:/dev/shm # Shared memory for Playwright
     networks:
-      - scraper-network
+      - kopers-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8084/health"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8084/health",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -76,31 +88,35 @@ services:
     entrypoint: ["/app/lifecycle-consumer"]
     environment:
       # Database
-      DB_HOST: ${DB_HOST:-postgres}
-      DB_PORT: ${DB_PORT:-5432}
+      DB_HOST: ${DB_HOST:-49.13.49.90}
+      DB_PORT: ${DB_PORT:-5111}
       DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-m5DAUj3AC1VGdLf0bamLSYesXKlYraZgq4e21qHp4NLIrO4t1mLfHI44WkEr0OQL}
       DB_NAME: ${DB_NAME:-tall_affiliate}
+      DB_SSL_MODE: ${DB_SSL_MODE:-disable}
 
       # Redis
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
-      REDIS_STREAM: ${REDIS_STREAM:-product:events:stream}
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_USERNAME: ${REDIS_USERNAME}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_STREAM: ${REDIS_STREAM:-stream:product_lifecycle}
 
       # Scraper URL for API calls
-      SCRAPER_URL: ${SCRAPER_URL:-http://size-scraper:8084}
+      SCRAPER_URL: ${SCRAPER_URL:-http://amazon-scraper:8084}
 
       # Logging
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_FORMAT: ${LOG_FORMAT:-json}
 
     networks:
-      - scraper-network
+      - kopers-network
     restart: unless-stopped
 
 networks:
-  scraper-network:
+  kopers-network:
     external: true
-    name: coolify-network
 
 volumes:
   scraper_logs:
