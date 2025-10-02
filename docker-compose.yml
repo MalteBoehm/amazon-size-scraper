@@ -58,6 +58,7 @@ services:
     ports:
       - "${SERVER_PORT:-8084}:8084"
     volumes:
+      - ./proxy_list:/app/proxy_list:ro
       - scraper_logs:/app/logs
       - /dev/shm:/dev/shm # Shared memory for Playwright
     networks:
