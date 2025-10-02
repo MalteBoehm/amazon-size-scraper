@@ -58,7 +58,7 @@ services:
     ports:
       - "${SERVER_PORT:-8084}:8084"
     volumes:
-      - proxy_list:/app/proxy_list:ro
+      - ./proxy_list:/app/proxy_list:ro
       - scraper_logs:/app/logs
       - /dev/shm:/dev/shm # Shared memory for Playwright
     networks:
@@ -119,7 +119,5 @@ networks:
     external: true
 
 volumes:
-  proxy_list:
-    name: amazon-scraper-proxy-list
   scraper_logs:
     name: amazon-scraper-logs
