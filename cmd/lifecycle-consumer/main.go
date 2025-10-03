@@ -270,7 +270,7 @@ func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error
 			url = fmt.Sprintf("https://www.amazon.de/dp/%s", asin)
 		}
 
-		insertQuery := `INSERT INTO product (asin, title, url, status)
+		insertQuery := `INSERT INTO product (asin, title, detail_page_url, status)
 		                VALUES ($1, $2, $3, 'pending')
 		                ON CONFLICT (asin) DO NOTHING`
 		_, insertErr := c.db.Exec(ctx, insertQuery, asin, title, url)
@@ -489,7 +489,7 @@ func (c *Consumer) publishProductCreated(ctx context.Context, asin string, dimen
 	var title, url string
 	var brand *string // Allow NULL
 	err := c.db.QueryRow(ctx,
-		"SELECT title, brand, url FROM product WHERE asin = $1",
+		"SELECT title, brand, detail_page_url FROM product WHERE asin = $1",
 		asin,
 	).Scan(&title, &brand, &url)
 	if err != nil {

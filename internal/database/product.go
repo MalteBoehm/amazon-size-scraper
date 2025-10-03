@@ -153,7 +153,7 @@ func (db *DB) UpdateProductStatus(ctx context.Context, asin string, status Produ
 // Deprecated: Use product lifecycle table methods instead
 func (db *DB) GetPendingProducts(ctx context.Context, limit int) ([]*Product, error) {
 	query := `
-		SELECT asin, title, brand, category, url, status, created_at, updated_at
+		SELECT asin, title, brand, category, detail_page_url, status, created_at, updated_at
 		FROM product
 		WHERE status = $1
 		ORDER BY created_at ASC
@@ -185,7 +185,7 @@ func (db *DB) GetPendingProducts(ctx context.Context, limit int) ([]*Product, er
 // Deprecated: Use GetProductLifecycleByASIN for the new product table
 func (db *DB) GetProduct(ctx context.Context, asin string) (*Product, error) {
 	query := `
-		SELECT asin, title, brand, category, url, size_table,
+		SELECT asin, title, brand, category, detail_page_url, size_table,
 			   status, error_message, last_scraped_at, created_at, updated_at
 		FROM product
 		WHERE asin = $1`
