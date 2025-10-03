@@ -60,10 +60,15 @@ func main() {
 	}
 	logger.Info("Connected to Redis", "addr", redisAddr)
 
-	// Database connection
-	dbURL := fmt.Sprintf("postgres://postgres:%s@localhost:%s/tall_affiliate?sslmode=disable",
-		getEnv("DB_PASSWORD", "postgres"),
-		getEnv("DB_PORT", "5433"),
+	// Database connection - use individual components like the working services
+	dbHost := getEnv("DB_HOST", "localhost")
+	dbPort := getEnv("DB_PORT", "5432")
+	dbUser := getEnv("DB_USER", "postgres")
+	dbPassword := getEnv("DB_PASSWORD", "postgres")
+	dbName := getEnv("DB_NAME", "tall_affiliate")
+
+	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
+		dbUser, dbPassword, dbHost, dbPort, dbName,
 	)
 
 	db, err := pgxpool.New(ctx, dbURL)
