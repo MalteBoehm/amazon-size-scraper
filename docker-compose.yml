@@ -96,11 +96,11 @@ services:
       DB_SSL_MODE: ${DB_SSL_MODE:-disable}
 
       # Redis
-      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
-      REDIS_HOST: ${REDIS_HOST}
-      REDIS_PORT: ${REDIS_PORT}
-      REDIS_USERNAME: ${REDIS_USERNAME}
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_ADDR: ${REDIS_ADDR:-49.13.49.90:3020}
+      REDIS_HOST: ${REDIS_HOST:-49.13.49.90}
+      REDIS_PORT: ${REDIS_PORT:-3020}
+      REDIS_USERNAME: ${REDIS_USERNAME:-default}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-pass}
       REDIS_STREAM: ${REDIS_STREAM:-stream:product_lifecycle}
 
       # Scraper URL for API calls
