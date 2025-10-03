@@ -32,8 +32,14 @@ func main() {
 		redisAddr = "localhost:6379"
 	}
 
+	// Redis authentication
+	redisPassword := os.Getenv("REDIS_PASSWORD")
+	redisUsername := os.Getenv("REDIS_USERNAME")
+
 	rdb := redis.NewClient(&redis.Options{
-		Addr: redisAddr,
+		Addr:     redisAddr,
+		Password: redisPassword,
+		Username: redisUsername,
 	})
 
 	// Test Redis connection
