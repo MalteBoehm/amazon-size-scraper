@@ -283,9 +283,9 @@ func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error
 		actualEventType = typeField
 	}
 
-	// Accept both old and new event types
+	// Accept both official events and catalog.product_enrichment_requested.v1
 	isValidEventType := actualEventType == events.Event_01_ProductDetected ||
-		actualEventType == "NEW_PRODUCT_DETECTED" ||
+		actualEventType == events.Event_02A_ProductValidated ||
 		actualEventType == "catalog.product_enrichment_requested.v1"
 
 	if actualEventType == "" || !isValidEventType {
