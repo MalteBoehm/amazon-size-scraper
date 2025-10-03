@@ -39,6 +39,18 @@ if [ ! -z "$REDIS_ADDR" ] || [ "$SERVICE_NAME" = "lifecycle-consumer" ]; then
     # Parse Redis address
     REDIS_HOST="redis"
     REDIS_PORT="6379"
+    
+    # Use REDIS_HOST from environment if available
+    if [ ! -z "$REDIS_HOST" ]; then
+        REDIS_HOST="$REDIS_HOST"
+    fi
+    
+    # Use REDIS_PORT from environment if available
+    if [ ! -z "$REDIS_PORT" ]; then
+        REDIS_PORT="$REDIS_PORT"
+    fi
+    
+    # Parse REDIS_ADDR if available (overrides host/port)
     if [ ! -z "$REDIS_ADDR" ]; then
         REDIS_HOST="${REDIS_ADDR%%:*}"
         REDIS_PORT="${REDIS_ADDR##*:}"
