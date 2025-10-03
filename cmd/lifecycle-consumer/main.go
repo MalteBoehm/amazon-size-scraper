@@ -66,7 +66,13 @@ func main() {
 	dbPortStr := getEnv("DB_PORT", "5432")
 	dbUser := getEnv("DB_USER", "postgres")
 	dbPassword := getEnv("DB_PASSWORD", "postgres")
-	dbName := getEnv("DB_NAME", "amazon_scraper") // Changed default to match size-scraper
+	dbName := getEnv("DB_NAME", "amazon_scraper") // Force amazon_scraper to match size-scraper
+
+	// Override tall_affiliate to amazon_scraper for consistency
+	if dbName == "tall_affiliate" {
+		dbName = "amazon_scraper"
+		logger.Info("Overriding database name from tall_affiliate to amazon_scraper for consistency")
+	}
 
 	// Convert port to int
 	dbPort := 5432
