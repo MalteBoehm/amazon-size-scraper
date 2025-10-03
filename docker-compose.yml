@@ -15,7 +15,7 @@ services:
       DB_PORT: ${DB_PORT:-5111}
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-m5DAUj3AC1VGdLf0bamLSYesXKlYraZgq4e21qHp4NLIrO4t1mLfHI44WkEr0OQL}
-      DB_NAME: ${DB_NAME:-tall_affiliate}
+      DB_NAME: ${DB_NAME:-amazon_scraper}
       DB_SSL_MODE: ${DB_SSL_MODE:-disable}
 
       # Redis
@@ -92,7 +92,7 @@ services:
       DB_PORT: ${DB_PORT:-5111}
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-m5DAUj3AC1VGdLf0bamLSYesXKlYraZgq4e21qHp4NLIrO4t1mLfHI44WkEr0OQL}
-      DB_NAME: ${DB_NAME:-tall_affiliate}
+      DB_NAME: ${DB_NAME:-amazon_scraper}
       DB_SSL_MODE: ${DB_SSL_MODE:-disable}
 
       # Redis

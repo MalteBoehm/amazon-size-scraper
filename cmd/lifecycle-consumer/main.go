@@ -67,20 +67,76 @@ func main() {
 	dbPassword := getEnv("DB_PASSWORD", "postgres")
 	dbName := getEnv("DB_NAME", "tall_affiliate")
 
+	// DEBUG: Log all database configuration values
+	logger.Info("DATABASE CONFIGURATION DEBUG",
+		"DB_HOST", dbHost,
+		"DB_PORT", dbPort,
+		"DB_USER", dbUser,
+		"DB_PASSWORD", "***MASKED***",
+		"DB_NAME", dbName,
+		"DB_SSL_MODE", getEnv("DB_SSL_MODE", "disable"),
+	)
+
+	// DEBUG: Check if we're in Docker by checking for Docker-specific environment
+	dockerEnv := os.Getenv("DOCKER_CONTAINER")
+	if dockerEnv != "" {
+		logger.Info("RUNNING IN DOCKER CONTAINER", "container_id", dockerEnv)
+	} else {
+		logger.Info("NOT RUNNING IN DOCKER (or DOCKER_CONTAINER not set)")
+	}
+
 	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		dbUser, dbPassword, dbHost, dbPort, dbName,
 	)
 
+	// DEBUG: Log the connection URL (with masked password)
+	maskedURL := fmt.Sprintf("postgres://%s:***@%s:%s/%s?sslmode=disable",
+		dbUser, dbHost, dbPort, dbName,
+	)
+	logger.Info("ATTEMPTING DATABASE CONNECTION", "url", maskedURL)
+
 	db, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
+		logger.Error("FAILED TO CREATE DATABASE POOL", "error", err)
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 	defer db.Close()
 
+	// DEBUG: Test connection with detailed error information
 	if err := db.Ping(ctx); err != nil {
+		logger.Error("DATABASE PING FAILED",
+			"error", err,
+			"host", dbHost,
+			"port", dbPort,
+			"database", dbName,
+			"user", dbUser,
+		)
+
+		// Additional debug: Check if database exists by trying to connect to postgres database
+		logger.Info("TESTING CONNECTION TO POSTGRES DATABASE (default)")
+		testURL := fmt.Sprintf("postgres://%s:%s@%s:%s/postgres?sslmode=disable",
+			dbUser, dbPassword, dbHost, dbPort,
+		)
+		testDB, testErr := pgxpool.New(ctx, testURL)
+		if testErr == nil {
+			defer testDB.Close()
+			if testErr := testDB.Ping(ctx); testErr == nil {
+				logger.Info("SUCCESSFULLY CONNECTED TO POSTGRES DATABASE - checking if target database exists")
+				var dbExists bool
+				err := testDB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", dbName).Scan(&dbExists)
+				if err == nil {
+					if dbExists {
+						logger.Info("TARGET DATABASE EXISTS", "database", dbName)
+					} else {
+						logger.Error("TARGET DATABASE DOES NOT EXIST", "database", dbName)
+					}
+				}
+			}
+		}
+
 		log.Fatalf("Failed to ping database: %v", err)
 	}
-	logger.Info("Connected to database")
+	logger.Info("Connected to database", "database", dbName)
 
 	// Create consumer
 	consumer := &Consumer{
