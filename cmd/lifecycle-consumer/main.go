@@ -172,6 +172,29 @@ func (c *Consumer) Run(ctx context.Context) error {
 	consumerGroup := "lifecycle-consumer-group"
 	consumerName := "consumer-1"
 
+	// DEBUG: Log actual stream key and check if stream exists
+	c.logger.Info("DEBUG: Consumer configuration",
+		"env_stream_key", getEnv("REDIS_STREAM", "NOT_SET"),
+		"constants_stream", constants.StreamProductLifecycle,
+		"final_stream_key", streamKey)
+
+	// Check if stream exists
+	streamInfo, err := c.redis.XInfoStream(ctx, streamKey).Result()
+	if err != nil {
+		c.logger.Error("DEBUG: Stream does not exist", "stream", streamKey, "error", err)
+		// Try alternative stream names
+		alternativeStreams := []string{"stream:product_lifecycle", "product-lifecycle-stream"}
+		for _, altStream := range alternativeStreams {
+			if altInfo, altErr := c.redis.XInfoStream(ctx, altStream).Result(); altErr == nil {
+				c.logger.Info("DEBUG: Found alternative stream", "stream", altStream, "length", altInfo.Length)
+				streamKey = altStream
+				break
+			}
+		}
+	} else {
+		c.logger.Info("DEBUG: Stream exists", "stream", streamKey, "length", streamInfo.Length)
+	}
+
 	// Create consumer group (ignore error if already exists)
 	c.redis.XGroupCreate(ctx, streamKey, consumerGroup, "0").Err()
 
@@ -220,17 +243,51 @@ func (c *Consumer) Run(ctx context.Context) error {
 }
 
 func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error {
+	// DEBUG: Log all incoming message details
+	c.logger.Info("DEBUG: Processing message",
+		"message_id", msg.ID,
+		"keys", func() []string {
+			keys := make([]string, 0, len(msg.Values))
+			for k := range msg.Values {
+				keys = append(keys, k)
+			}
+			return keys
+		}(),
+		"event_type", msg.Values["event_type"],
+		"type", msg.Values["type"])
+
 	// Skip initialization messages
 	if initVal, ok := msg.Values["init"].(string); ok && initVal == "true" {
 		c.logger.Info("skipping initialization message", "message_id", msg.ID)
 		return nil
 	}
 
-	// Check event type
-	eventType, ok := msg.Values["event_type"].(string)
-	if !ok || (eventType != events.Event_01_ProductDetected && eventType != "NEW_PRODUCT_DETECTED") {
-		if ok {
-			c.logger.Debug("Skipping non-matching event", "event_type", eventType, "message_id", msg.ID)
+	// Check event type - try both "event_type" and "type" fields
+	eventType, hasEventType := msg.Values["event_type"].(string)
+	typeField, hasTypeField := msg.Values["type"].(string)
+
+	// DEBUG: Log event type detection
+	c.logger.Info("DEBUG: Event type detection",
+		"has_event_type", hasEventType,
+		"event_type", eventType,
+		"has_type_field", hasTypeField,
+		"type_field", typeField,
+		"expected_event_1", events.Event_01_ProductDetected,
+		"expected_event_2", "NEW_PRODUCT_DETECTED")
+
+	// Try both event type fields
+	actualEventType := ""
+	if hasEventType {
+		actualEventType = eventType
+	} else if hasTypeField {
+		actualEventType = typeField
+	}
+
+	if actualEventType == "" || (actualEventType != events.Event_01_ProductDetected && actualEventType != "NEW_PRODUCT_DETECTED") {
+		if actualEventType != "" {
+			c.logger.Debug("Skipping non-matching event", "event_type", actualEventType, "message_id", msg.ID)
+		} else {
+			c.logger.Debug("Skipping message with no event type", "message_id", msg.ID)
 		}
 		return nil // Skip non-matching events
 	}
@@ -259,16 +316,32 @@ func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error
 		"title", payload["title"],
 	)
 
-	// Check if product exists and is still pending
+	// DEBUG: Check if product exists and is still pending
 	var status string
 	err := c.db.QueryRow(ctx, "SELECT status FROM product WHERE asin = $1", asin).Scan(&status)
+
+	// DEBUG: Log product check
+	c.logger.Info("DEBUG: Product existence check",
+		"asin", asin,
+		"query_error", err,
+		"found_status", status)
+
 	if err != nil {
 		// Product doesn't exist, create it
 		title, _ := payload["name"].(string)
+		if title == "" {
+			title, _ = payload["title"].(string)
+		}
 		url, _ := payload["detail_page_url"].(string)
 		if url == "" {
 			url = fmt.Sprintf("https://www.amazon.de/dp/%s", asin)
 		}
+
+		// DEBUG: Log product creation attempt
+		c.logger.Info("DEBUG: Creating new product",
+			"asin", asin,
+			"title", title,
+			"url", url)
 
 		insertQuery := `INSERT INTO product (asin, title, detail_page_url, status)
 		                VALUES ($1, $2, $3, 'pending')
