@@ -26,13 +26,17 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
-	// Redis connection
-	redisAddr := os.Getenv("REDIS_ADDR")
-	if redisAddr == "" {
-		redisAddr = "localhost:6379"
+	// Redis connection - use individual host and port like the working services
+	redisHost := os.Getenv("REDIS_HOST")
+	redisPort := os.Getenv("REDIS_PORT")
+	if redisHost == "" {
+		redisHost = "localhost"
+	}
+	if redisPort == "" {
+		redisPort = "6379"
 	}
 
-	// Redis authentication
+	redisAddr := fmt.Sprintf("%s:%s", redisHost, redisPort)
 	redisPassword := os.Getenv("REDIS_PASSWORD")
 	redisUsername := os.Getenv("REDIS_USERNAME")
 
