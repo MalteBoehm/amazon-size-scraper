@@ -36,11 +36,18 @@ func main() {
 	redisPassword := os.Getenv("REDIS_PASSWORD")
 	redisUsername := os.Getenv("REDIS_USERNAME")
 
-	rdb := redis.NewClient(&redis.Options{
+	// Create Redis options
+	options := &redis.Options{
 		Addr:     redisAddr,
 		Password: redisPassword,
-		Username: redisUsername,
-	})
+	}
+
+	// Only set username if it's not empty (Redis without username)
+	if redisUsername != "" {
+		options.Username = redisUsername
+	}
+
+	rdb := redis.NewClient(options)
 
 	// Test Redis connection
 	ctx := context.Background()
