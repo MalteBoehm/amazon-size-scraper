@@ -102,7 +102,7 @@ func main() {
 			MaxConnIdle: 1 * time.Minute,
 		}
 
-		db, err := database.New(ctx, dbConfig)
+		db, err = database.New(ctx, dbConfig)
 		if err != nil {
 			logger.Error("failed to connect to database", "error", err)
 			os.Exit(1)
