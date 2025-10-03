@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
-	
+
 	"github.com/maltedev/amazon-size-scraper/internal/models"
 )
 
@@ -33,8 +33,8 @@ type Product struct {
 }
 
 type SizeTable struct {
-	Sizes        []string                       `json:"sizes"`
-	Measurements map[string]map[string]float64  `json:"measurements"`
+	Sizes        []string                      `json:"sizes"`
+	Measurements map[string]map[string]float64 `json:"measurements"`
 	Unit         string                        `json:"unit"`
 }
 
@@ -42,7 +42,7 @@ type SizeTable struct {
 // Deprecated: Use InsertProductLifecycle for the new product table
 func (db *DB) InsertProduct(ctx context.Context, p *Product) error {
 	query := `
-		INSERT INTO products (asin, title, brand, category, url, status)
+		INSERT INTO product (asin, title, brand, category, url, status)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (asin) DO UPDATE SET
 			title = EXCLUDED.title,
@@ -72,7 +72,7 @@ func (db *DB) UpdateProductSizes(ctx context.Context, asin string, sizeTable *Si
 	}
 
 	query := `
-		UPDATE products SET
+		UPDATE product SET
 			size_table = $2,
 			status = $3,
 			scraped_at = CURRENT_TIMESTAMP,
@@ -102,7 +102,7 @@ func (db *DB) UpdateProductColors(ctx context.Context, asin string, colors []*mo
 
 	// Try to update the products table first (if it exists)
 	query := `
-		UPDATE products SET
+		UPDATE product SET
 			color_variations = $2,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE asin = $1`
@@ -116,7 +116,7 @@ func (db *DB) UpdateProductColors(ctx context.Context, asin string, colors []*mo
 				enrichment_source = 'scraper',
 				updated_at = CURRENT_TIMESTAMP
 			WHERE asin = $1`
-		
+
 		result, err = db.pool.Exec(ctx, queryLifecycle, asin, colorsJSON)
 		if err != nil {
 			return fmt.Errorf("failed to update product colors: %w", err)
@@ -135,7 +135,7 @@ func (db *DB) UpdateProductColors(ctx context.Context, asin string, colors []*mo
 // Deprecated: Use product lifecycle table methods instead
 func (db *DB) UpdateProductStatus(ctx context.Context, asin string, status ProductStatus, errorMsg string) error {
 	query := `
-		UPDATE products SET
+		UPDATE product SET
 			status = $2,
 			error_message = $3,
 			updated_at = CURRENT_TIMESTAMP
@@ -154,7 +154,7 @@ func (db *DB) UpdateProductStatus(ctx context.Context, asin string, status Produ
 func (db *DB) GetPendingProducts(ctx context.Context, limit int) ([]*Product, error) {
 	query := `
 		SELECT asin, title, brand, category, url, status, created_at, updated_at
-		FROM products
+		FROM product
 		WHERE status = $1
 		ORDER BY created_at ASC
 		LIMIT $2`
@@ -185,9 +185,9 @@ func (db *DB) GetPendingProducts(ctx context.Context, limit int) ([]*Product, er
 // Deprecated: Use GetProductLifecycleByASIN for the new product table
 func (db *DB) GetProduct(ctx context.Context, asin string) (*Product, error) {
 	query := `
-		SELECT asin, title, brand, category, url, size_table, 
+		SELECT asin, title, brand, category, url, size_table,
 			   status, error_message, last_scraped_at, created_at, updated_at
-		FROM products
+		FROM product
 		WHERE asin = $1`
 
 	p := &Product{}
@@ -210,7 +210,7 @@ func (db *DB) GetProduct(ctx context.Context, asin string) (*Product, error) {
 func (db *DB) CountProductsByStatus(ctx context.Context) (map[ProductStatus]int, error) {
 	query := `
 		SELECT status, COUNT(*) as count
-		FROM products
+		FROM product
 		GROUP BY status`
 
 	rows, err := db.pool.Query(ctx, query)

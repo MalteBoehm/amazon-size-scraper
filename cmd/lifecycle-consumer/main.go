@@ -261,7 +261,7 @@ func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error
 
 	// Check if product exists and is still pending
 	var status string
-	err := c.db.QueryRow(ctx, "SELECT status FROM products WHERE asin = $1", asin).Scan(&status)
+	err := c.db.QueryRow(ctx, "SELECT status FROM product WHERE asin = $1", asin).Scan(&status)
 	if err != nil {
 		// Product doesn't exist, create it
 		title, _ := payload["name"].(string)
@@ -270,8 +270,8 @@ func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error
 			url = fmt.Sprintf("https://www.amazon.de/dp/%s", asin)
 		}
 
-		insertQuery := `INSERT INTO products (asin, title, url, status) 
-		                VALUES ($1, $2, $3, 'pending') 
+		insertQuery := `INSERT INTO product (asin, title, url, status)
+		                VALUES ($1, $2, $3, 'pending')
 		                ON CONFLICT (asin) DO NOTHING`
 		_, insertErr := c.db.Exec(ctx, insertQuery, asin, title, url)
 		if insertErr != nil {
@@ -445,7 +445,7 @@ func (c *Consumer) updateProduct(ctx context.Context, asin string, dimensions *S
 	productGroupsJSON, _ := json.Marshal(dimensions.ProductGroups)
 
 	query := `
-		UPDATE products 
+		UPDATE product
 		SET size_table = $2,
 		    status = $3,
 		    title = COALESCE(NULLIF($4, ''), title),
@@ -489,7 +489,7 @@ func (c *Consumer) publishProductCreated(ctx context.Context, asin string, dimen
 	var title, url string
 	var brand *string // Allow NULL
 	err := c.db.QueryRow(ctx,
-		"SELECT title, brand, url FROM products WHERE asin = $1",
+		"SELECT title, brand, url FROM product WHERE asin = $1",
 		asin,
 	).Scan(&title, &brand, &url)
 	if err != nil {
