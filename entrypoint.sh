@@ -66,6 +66,8 @@ fi
 
 # Give time for any database migrations to complete
 echo "[ENTRYPOINT] Waiting for database migrations..."
+echo "[ENTRYPOINT] DEBUG: Database name that will be used: ${DB_NAME}"
+echo "[ENTRYPOINT] DEBUG: Full database connection info: ${DB_HOST}:${DB_PORT}/${DB_NAME}"
 sleep 10
 
 # Check which binary to execute

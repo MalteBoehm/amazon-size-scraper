@@ -38,14 +38,14 @@ func main() {
 		// maxRequests   = flag.Int("max-requests", getEnvInt("MAX_REQUESTS_PER_BROWSER", 20), "Max requests before recreating browser")
 	)
 	flag.Parse()
-	
+
 	// Load config
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Printf("Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	// Setup logging
 	logLevel := slog.LevelInfo
 	if os.Getenv("LOG_LEVEL") == "debug" {
@@ -55,11 +55,11 @@ func main() {
 		Level: logLevel,
 	}))
 	slog.SetDefault(logger)
-	
+
 	// Context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	// Handle shutdown signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -68,16 +68,34 @@ func main() {
 		logger.Info("received shutdown signal")
 		cancel()
 	}()
-	
+
 	// Database connection (skip in debug mode with single URL)
 	var db *database.DB
 	if *productURL == "" || !cfg.Logging.DebugMode {
+		// Handle database name inconsistencies across the system
+		// The actual database on the server is named "tall-affiliate" (with hyphen)
+		// but different parts of the code use different defaults
+		finalDbName := *dbName
+		if finalDbName == "amazon_scraper" || finalDbName == "tall_affiliate" {
+			finalDbName = "tall-affiliate" // Use the actual database name that exists
+			logger.Info("Database name normalized to: tall-affiliate (actual database on server)")
+		}
+
+		// Log the final database configuration for debugging
+		logger.Info("DATABASE CONFIGURATION DEBUG",
+			"original_name", *dbName,
+			"final_name", finalDbName,
+			"host", *dbHost,
+			"port", *dbPort,
+			"user", *dbUser,
+		)
+
 		dbConfig := database.Config{
 			Host:        *dbHost,
 			Port:        *dbPort,
 			User:        *dbUser,
 			Password:    *dbPassword,
-			Database:    *dbName,
+			Database:    finalDbName,
 			MaxConns:    int32(*concurrent * 2),
 			MinConns:    1,
 			MaxConnLife: 5 * time.Minute,
@@ -93,7 +111,7 @@ func main() {
 
 		logger.Info("connected to database")
 	}
-	
+
 	// Proxy setup
 	var proxyManager *proxy.ProxyManager
 	if *useProxies {
@@ -109,16 +127,16 @@ func main() {
 			logger.Warn("continuing without proxy rotation")
 			*useProxies = false
 		} else {
-			logger.Info("proxy manager initialized", 
+			logger.Info("proxy manager initialized",
 				"total_proxies", proxyManager.GetProxyCount(),
 				"healthy_proxies", proxyManager.GetHealthyProxyCount())
 		}
 	}
-	
+
 	// Browser setup
 	browserOpts := browser.DefaultOptions()
 	browserOpts.Headless = *headless
-	
+
 	// Debug mode with single URL
 	if *productURL != "" {
 		logger.Info("debug mode: scraping single product URL", "url", *productURL)
@@ -167,10 +185,10 @@ func main() {
 	// Phase 1: Search crawling (if URL provided and not scrape-only)
 	if *searchURL != "" && !*scrapeOnly {
 		logger.Info("starting search crawl phase", "url", *searchURL)
-		
+
 		var b *browser.Browser
 		var err error
-		
+
 		if *useProxies && proxyManager != nil {
 			// Use a random proxy for search crawling
 			proxy, err := proxyManager.GetRandomProxy()
@@ -178,18 +196,18 @@ func main() {
 				logger.Error("failed to get proxy for search crawling", "error", err)
 				os.Exit(1)
 			}
-			
+
 			searchOpts := *browserOpts
 			searchOpts.ProxyServer = fmt.Sprintf("http://%s:%s", proxy.Host, proxy.Port)
 			searchOpts.ProxyUsername = proxy.Username
 			searchOpts.ProxyPassword = proxy.Password
-			
+
 			b, err = browser.New(&searchOpts)
 			if err != nil {
 				logger.Error("failed to create browser with proxy", "error", err)
 				os.Exit(1)
 			}
-			
+
 			logger.Info("search crawling with proxy", "proxy_host", proxy.Host)
 		} else {
 			b, err = browser.New(browserOpts)
@@ -198,47 +216,47 @@ func main() {
 				os.Exit(1)
 			}
 		}
-		
+
 		searchCrawler := scraper.NewSearchCrawler(b, db)
 		if err := searchCrawler.CrawlSearch(ctx, *searchURL); err != nil {
 			logger.Error("search crawl failed", "error", err)
 			b.Close()
 			os.Exit(1)
 		}
-		
+
 		b.Close()
 		logger.Info("search crawl completed")
-		
+
 		// Get stats
 		counts, _ := db.CountProductsByStatus(ctx)
-		logger.Info("product statistics", 
+		logger.Info("product statistics",
 			"pending", counts[database.StatusPending],
 			"completed", counts[database.StatusCompleted],
 			"failed", counts[database.StatusFailed])
 	}
-	
+
 	// Phase 2: Product scraping
 	logger.Info("starting product scraping phase", "concurrent", *concurrent, "use_proxies", *useProxies)
-	
+
 	// Declare variables in outer scope
 	var scrapers []*scraper.ProductScraper
 	var browsers []*browser.Browser
-	
+
 	if *useProxies && proxyManager != nil {
-		// Use browser pools with proxy rotation  
+		// Use browser pools with proxy rotation
 		logger.Info("initializing browser pools with proxy rotation")
-		
+
 		// TODO: Use browser pools when pool-based ProductScraper is implemented
 		// poolConfig := &browser.PoolConfig{
 		// 	PoolSize:    *poolSize,
 		// 	MaxRequests: *maxRequests,
 		// }
-		
+
 		// For now, create one browser with random proxy per scraper
 		// This is a temporary solution until we implement pool-based ProductScraper
 		scrapers = make([]*scraper.ProductScraper, *concurrent)
 		browsers = make([]*browser.Browser, *concurrent)
-		
+
 		for i := 0; i < *concurrent; i++ {
 			// Get a random proxy for each browser
 			proxy, err := proxyManager.GetRandomProxy()
@@ -246,13 +264,13 @@ func main() {
 				logger.Error("failed to get proxy", "index", i, "error", err)
 				os.Exit(1)
 			}
-			
+
 			// Create browser options with proxy
 			proxyOpts := *browserOpts
 			proxyOpts.ProxyServer = fmt.Sprintf("http://%s:%s", proxy.Host, proxy.Port)
 			proxyOpts.ProxyUsername = proxy.Username
 			proxyOpts.ProxyPassword = proxy.Password
-			
+
 			b, err := browser.New(&proxyOpts)
 			if err != nil {
 				logger.Error("failed to create browser with proxy", "index", i, "proxy", proxy.Host, "error", err)
@@ -262,19 +280,19 @@ func main() {
 				}
 				os.Exit(1)
 			}
-			
+
 			browsers[i] = b
 			scrapers[i] = scraper.NewProductScraper(b, db, cfg)
-			
+
 			logger.Info("created scraper with proxy", "index", i, "proxy_host", proxy.Host)
 		}
 	} else {
 		// Legacy mode without proxies
 		logger.Info("initializing scrapers without proxy rotation")
-		
+
 		scrapers = make([]*scraper.ProductScraper, *concurrent)
 		browsers = make([]*browser.Browser, *concurrent)
-		
+
 		for i := 0; i < *concurrent; i++ {
 			b, err := browser.New(browserOpts)
 			if err != nil {
@@ -289,7 +307,7 @@ func main() {
 			scrapers[i] = scraper.NewProductScraper(b, db, cfg)
 		}
 	}
-	
+
 	// Start concurrent scrapers
 	errChan := make(chan error, *concurrent)
 	for i, s := range scrapers {
@@ -302,7 +320,7 @@ func main() {
 			}
 		}(i, s)
 	}
-	
+
 	// Wait for all scrapers to complete
 	var scrapeErrors []error
 	for i := 0; i < *concurrent; i++ {
@@ -310,19 +328,19 @@ func main() {
 			scrapeErrors = append(scrapeErrors, err)
 		}
 	}
-	
+
 	// Clean up browsers
 	for _, b := range browsers {
 		b.Close()
 	}
-	
+
 	if len(scrapeErrors) > 0 {
 		logger.Error("some scrapers failed", "errors", scrapeErrors)
 	}
-	
+
 	// Final statistics
 	counts, _ := db.CountProductsByStatus(ctx)
-	logger.Info("scraping completed", 
+	logger.Info("scraping completed",
 		"pending", counts[database.StatusPending],
 		"completed", counts[database.StatusCompleted],
 		"failed", counts[database.StatusFailed])
