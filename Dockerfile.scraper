@@ -27,7 +27,7 @@ COPY . .
 
 # Build both binaries
 RUN CGO_ENABLED=0 GOOS=linux go build -mod=mod -o size-scraper ./cmd/size-scraper
-RUN CGO_ENABLED=0 GOOS=linux go build -mod=mod -o lifecycle-consumer ./cmd/lifecycle-consumer
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=mod -o lifecycle-consumer-binary ./cmd/lifecycle-consumer
 
 # Create a symlink for backward compatibility
 RUN ln -s size-scraper amazon-scraper
@@ -82,7 +82,7 @@ EXPOSE 8084
 RUN chmod +x /app/entrypoint.sh
 
 # Create lifecycle consumer entrypoint
-RUN echo '#!/bin/sh\nexec ./lifecycle-consumer "$@"' > /app/lifecycle-consumer && \
+RUN echo '#!/bin/sh\nexec ./lifecycle-consumer-binary "$@"' > /app/lifecycle-consumer && \
     chmod +x /app/lifecycle-consumer
 
 # Run the application
