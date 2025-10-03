@@ -68,11 +68,21 @@ func main() {
 	dbPassword := getEnv("DB_PASSWORD", "postgres")
 	dbName := getEnv("DB_NAME", "amazon_scraper") // Default to amazon_scraper
 
-	// Override to use the correct database name that exists on the server
+	// Handle database name inconsistencies across the system
+	// The actual database on the server is named "tall-affiliate" (with hyphen)
+	// but different parts of the code use different defaults
 	if dbName == "amazon_scraper" || dbName == "tall_affiliate" {
 		dbName = "tall-affiliate" // Use the actual database name that exists
-		logger.Info("Using database name: tall-affiliate (actual database on server)")
+		logger.Info("Database name normalized to: tall-affiliate (actual database on server)")
 	}
+
+	// Log the final database name for debugging
+	logger.Info("Final database configuration",
+		"original_name", getEnv("DB_NAME", "amazon_scraper"),
+		"final_name", dbName,
+		"host", dbHost,
+		"port", dbPort,
+	)
 
 	// Convert port to int
 	dbPort := 5432
