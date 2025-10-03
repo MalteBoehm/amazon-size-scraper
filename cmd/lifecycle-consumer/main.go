@@ -446,7 +446,7 @@ func (c *Consumer) updateProduct(ctx context.Context, asin string, dimensions *S
 
 	query := `
 		UPDATE product
-		SET size_table = $2,
+		SET size_chart_data = $2,
 		    status = $3,
 		    title = COALESCE(NULLIF($4, ''), title),
 		    brand = COALESCE(NULLIF($5, ''), brand),
@@ -457,7 +457,6 @@ func (c *Consumer) updateProduct(ctx context.Context, asin string, dimensions *S
 		    gender = COALESCE(NULLIF($10, ''), gender),
 		    colors = CASE WHEN $11::jsonb IS NOT NULL THEN $11::jsonb ELSE colors END,
 		    product_groups = CASE WHEN $12::jsonb IS NOT NULL THEN $12::jsonb ELSE product_groups END,
-		    last_scraped_at = CURRENT_TIMESTAMP,
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE asin = $1`
 

@@ -42,13 +42,13 @@ type SizeTable struct {
 // Deprecated: Use InsertProductLifecycle for the new product table
 func (db *DB) InsertProduct(ctx context.Context, p *Product) error {
 	query := `
-		INSERT INTO product (asin, title, brand, category, url, status)
+		INSERT INTO product (asin, title, brand, category, detail_page_url, status)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (asin) DO UPDATE SET
 			title = EXCLUDED.title,
 			brand = EXCLUDED.brand,
 			category = EXCLUDED.category,
-			url = EXCLUDED.url,
+			detail_page_url = EXCLUDED.detail_page_url,
 			updated_at = CURRENT_TIMESTAMP
 		RETURNING created_at, updated_at`
 
@@ -73,9 +73,8 @@ func (db *DB) UpdateProductSizes(ctx context.Context, asin string, sizeTable *Si
 
 	query := `
 		UPDATE product SET
-			size_table = $2,
+			size_chart_data = $2,
 			status = $3,
-			scraped_at = CURRENT_TIMESTAMP,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE asin = $1`
 
@@ -103,7 +102,7 @@ func (db *DB) UpdateProductColors(ctx context.Context, asin string, colors []*mo
 	// Try to update the products table first (if it exists)
 	query := `
 		UPDATE product SET
-			color_variations = $2,
+			colors = $2,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE asin = $1`
 
@@ -137,11 +136,10 @@ func (db *DB) UpdateProductStatus(ctx context.Context, asin string, status Produ
 	query := `
 		UPDATE product SET
 			status = $2,
-			error_message = $3,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE asin = $1`
 
-	_, err := db.pool.Exec(ctx, query, asin, status, errorMsg)
+	_, err := db.pool.Exec(ctx, query, asin, status)
 	if err != nil {
 		return fmt.Errorf("failed to update product status: %w", err)
 	}
@@ -185,15 +183,15 @@ func (db *DB) GetPendingProducts(ctx context.Context, limit int) ([]*Product, er
 // Deprecated: Use GetProductLifecycleByASIN for the new product table
 func (db *DB) GetProduct(ctx context.Context, asin string) (*Product, error) {
 	query := `
-		SELECT asin, title, brand, category, detail_page_url, size_table,
-			   status, error_message, last_scraped_at, created_at, updated_at
+		SELECT asin, title, brand, category, detail_page_url, size_chart_data,
+			   status, created_at, updated_at
 		FROM product
 		WHERE asin = $1`
 
 	p := &Product{}
 	err := db.pool.QueryRow(ctx, query, asin).Scan(
 		&p.ASIN, &p.Title, &p.Brand, &p.Category, &p.URL, &p.SizeTable,
-		&p.Status, &p.ErrorMessage, &p.ScrapedAt, &p.CreatedAt, &p.UpdatedAt,
+		&p.Status, &p.CreatedAt, &p.UpdatedAt,
 	)
 
 	if err == sql.ErrNoRows {
