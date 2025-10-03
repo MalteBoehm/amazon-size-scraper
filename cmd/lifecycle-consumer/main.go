@@ -76,6 +76,12 @@ func main() {
 		logger.Info("Database name normalized to: tall-affiliate (actual database on server)")
 	}
 
+	// Convert port to int
+	dbPort := 5432
+	if port, err := strconv.Atoi(dbPortStr); err == nil {
+		dbPort = port
+	}
+
 	// Log the final database name for debugging
 	logger.Info("Final database configuration",
 		"original_name", getEnv("DB_NAME", "amazon_scraper"),
@@ -83,12 +89,6 @@ func main() {
 		"host", dbHost,
 		"port", dbPort,
 	)
-
-	// Convert port to int
-	dbPort := 5432
-	if port, err := strconv.Atoi(dbPortStr); err == nil {
-		dbPort = port
-	}
 
 	// DEBUG: Log all database configuration values
 	logger.Info("DATABASE CONFIGURATION DEBUG",
