@@ -283,7 +283,12 @@ func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error
 		actualEventType = typeField
 	}
 
-	if actualEventType == "" || (actualEventType != events.Event_01_ProductDetected && actualEventType != "NEW_PRODUCT_DETECTED") {
+	// Accept both old and new event types
+	isValidEventType := actualEventType == events.Event_01_ProductDetected ||
+		actualEventType == "NEW_PRODUCT_DETECTED" ||
+		actualEventType == "catalog.product_enrichment_requested.v1"
+
+	if actualEventType == "" || !isValidEventType {
 		if actualEventType != "" {
 			c.logger.Debug("Skipping non-matching event", "event_type", actualEventType, "message_id", msg.ID)
 		} else {
@@ -292,8 +297,21 @@ func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error
 		return nil // Skip non-matching events
 	}
 
-	// Get payload
-	payloadStr, ok := msg.Values["payload"].(string)
+	c.logger.Info("Processing valid event", "event_type", actualEventType, "message_id", msg.ID)
+
+	// Get payload - try both "payload" and "data" fields
+	var payloadStr string
+	var ok bool
+
+	// Try "payload" field first
+	if payloadStr, ok = msg.Values["payload"].(string); !ok {
+		// Try "data" field for catalog.product_enrichment_requested.v1 events
+		if dataStr, dataOk := msg.Values["data"].(string); dataOk {
+			payloadStr = dataStr
+			ok = true
+		}
+	}
+
 	if !ok {
 		return fmt.Errorf("missing payload in event")
 	}
@@ -304,11 +322,33 @@ func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error
 		return fmt.Errorf("failed to parse payload: %w", err)
 	}
 
-	// Get ASIN from payload
-	asin, ok := payload["asin"].(string)
-	if !ok || asin == "" {
+	// For catalog.product_enrichment_requested.v1 events, extract ASIN from nested data
+	var asin string
+	if actualEventType == "catalog.product_enrichment_requested.v1" {
+		// Try to get ASIN from nested structure
+		if data, exists := payload["data"].(map[string]interface{}); exists {
+			if nestedAsin, ok := data["asin"].(string); ok {
+				asin = nestedAsin
+			}
+		}
+		// Fallback to direct ASIN field
+		if asin == "" {
+			if nestedAsin, ok := payload["asin"].(string); ok {
+				asin = nestedAsin
+			}
+		}
+	} else {
+		// For other event types, get ASIN directly
+		if nestedAsin, ok := payload["asin"].(string); ok {
+			asin = nestedAsin
+		}
+	}
+
+	if asin == "" {
 		return fmt.Errorf("missing ASIN in payload")
 	}
+
+	c.logger.Info("Extracted ASIN from payload", "asin", asin, "event_type", actualEventType)
 
 	c.logger.Info("Processing product",
 		"message_id", msg.ID,
