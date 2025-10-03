@@ -10,12 +10,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/MalteBoehm/tall-affiliate-common/pkg/constants"
 	"github.com/MalteBoehm/tall-affiliate-common/pkg/events"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/maltedev/amazon-size-scraper/internal/database"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -60,12 +61,18 @@ func main() {
 	}
 	logger.Info("Connected to Redis", "addr", redisAddr)
 
-	// Database connection - use individual components like the working services
+	// Database connection - use same approach as size-scraper
 	dbHost := getEnv("DB_HOST", "localhost")
-	dbPort := getEnv("DB_PORT", "5432")
+	dbPortStr := getEnv("DB_PORT", "5432")
 	dbUser := getEnv("DB_USER", "postgres")
 	dbPassword := getEnv("DB_PASSWORD", "postgres")
-	dbName := getEnv("DB_NAME", "tall_affiliate")
+	dbName := getEnv("DB_NAME", "amazon_scraper") // Changed default to match size-scraper
+
+	// Convert port to int
+	dbPort := 5432
+	if port, err := strconv.Atoi(dbPortStr); err == nil {
+		dbPort = port
+	}
 
 	// DEBUG: Log all database configuration values
 	logger.Info("DATABASE CONFIGURATION DEBUG",
@@ -77,65 +84,28 @@ func main() {
 		"DB_SSL_MODE", getEnv("DB_SSL_MODE", "disable"),
 	)
 
-	// DEBUG: Check if we're in Docker by checking for Docker-specific environment
-	dockerEnv := os.Getenv("DOCKER_CONTAINER")
-	if dockerEnv != "" {
-		logger.Info("RUNNING IN DOCKER CONTAINER", "container_id", dockerEnv)
-	} else {
-		logger.Info("NOT RUNNING IN DOCKER (or DOCKER_CONTAINER not set)")
+	// Use database.Config like size-scraper
+	dbConfig := database.Config{
+		Host:        dbHost,
+		Port:        dbPort,
+		User:        dbUser,
+		Password:    dbPassword,
+		Database:    dbName,
+		SSLMode:     getEnv("DB_SSL_MODE", "disable"),
+		MaxConns:    10,
+		MinConns:    1,
+		MaxConnLife: 5 * time.Minute,
+		MaxConnIdle: 1 * time.Minute,
 	}
 
-	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		dbUser, dbPassword, dbHost, dbPort, dbName,
-	)
-
-	// DEBUG: Log the connection URL (with masked password)
-	maskedURL := fmt.Sprintf("postgres://%s:***@%s:%s/%s?sslmode=disable",
-		dbUser, dbHost, dbPort, dbName,
-	)
-	logger.Info("ATTEMPTING DATABASE CONNECTION", "url", maskedURL)
-
-	db, err := pgxpool.New(ctx, dbURL)
+	// Create database connection using same method as size-scraper
+	db, err := database.New(ctx, dbConfig)
 	if err != nil {
-		logger.Error("FAILED TO CREATE DATABASE POOL", "error", err)
+		logger.Error("FAILED TO CREATE DATABASE CONNECTION", "error", err)
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 	defer db.Close()
 
-	// DEBUG: Test connection with detailed error information
-	if err := db.Ping(ctx); err != nil {
-		logger.Error("DATABASE PING FAILED",
-			"error", err,
-			"host", dbHost,
-			"port", dbPort,
-			"database", dbName,
-			"user", dbUser,
-		)
-
-		// Additional debug: Check if database exists by trying to connect to postgres database
-		logger.Info("TESTING CONNECTION TO POSTGRES DATABASE (default)")
-		testURL := fmt.Sprintf("postgres://%s:%s@%s:%s/postgres?sslmode=disable",
-			dbUser, dbPassword, dbHost, dbPort,
-		)
-		testDB, testErr := pgxpool.New(ctx, testURL)
-		if testErr == nil {
-			defer testDB.Close()
-			if testErr := testDB.Ping(ctx); testErr == nil {
-				logger.Info("SUCCESSFULLY CONNECTED TO POSTGRES DATABASE - checking if target database exists")
-				var dbExists bool
-				err := testDB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", dbName).Scan(&dbExists)
-				if err == nil {
-					if dbExists {
-						logger.Info("TARGET DATABASE EXISTS", "database", dbName)
-					} else {
-						logger.Error("TARGET DATABASE DOES NOT EXIST", "database", dbName)
-					}
-				}
-			}
-		}
-
-		log.Fatalf("Failed to ping database: %v", err)
-	}
 	logger.Info("Connected to database", "database", dbName)
 
 	// Create consumer
@@ -167,7 +137,7 @@ func main() {
 
 type Consumer struct {
 	redis      *redis.Client
-	db         *pgxpool.Pool
+	db         *database.DB
 	httpClient *http.Client
 	scraperURL string
 	logger     *slog.Logger
