@@ -114,6 +114,37 @@ services:
       - kopers-network
     restart: unless-stopped
 
+  # Redis Job Consumer for bridging Redis streams to database jobs
+  redis-job-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile.scraper
+    container_name: amazon-scraper-redis-consumer
+    entrypoint: ["/app/redis-job-consumer"]
+    environment:
+      # Database
+      DB_HOST: ${DB_HOST:-49.13.49.90}
+      DB_PORT: ${DB_PORT:-5111}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-m5DAUj3AC1VGdLf0bamLSYesXKlYraZgq4e21qHp4NLIrO4t1mLfHI44WkEr0OQL}
+      DB_NAME: ${DB_NAME:-amazon_scraper}
+      DB_SSL_MODE: ${DB_SSL_MODE:-disable}
+
+      # Redis
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_USERNAME: ${REDIS_USERNAME}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+
+    networks:
+      - kopers-network
+    restart: unless-stopped
+
 networks:
   kopers-network:
     external: true

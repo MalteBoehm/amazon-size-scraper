@@ -6,9 +6,9 @@
 echo "🔧 Initializing Redis streams and consumer groups..."
 
 # Redis connection parameters
-REDIS_HOST="49.13.49.90"
-REDIS_PORT="3020"
-REDIS_PASSWORD="pass"
+REDIS_HOST="c00cg4gkscoog40c4w8c8cco"
+REDIS_PORT="6379"
+REDIS_PASSWORD=""
 
 # Stream and group configuration
 PRODUCT_STREAM="stream:product_lifecycle"
@@ -18,7 +18,7 @@ SCRAPER_CONSUMER_GROUP="scraper-consumer-group"
 
 # Test Redis connection
 echo "📡 Testing Redis connection..."
-if ! redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASSWORD" ping > /dev/null 2>&1; then
+if ! redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ping > /dev/null 2>&1; then
     echo "❌ Failed to connect to Redis at $REDIS_HOST:$REDIS_PORT"
     exit 1
 fi
@@ -33,12 +33,12 @@ init_stream_and_group() {
 
     echo ""
     echo "📊 Checking stream: $stream_name ($description)"
-    STREAM_INFO=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASSWORD" XINFO STREAM "$stream_name" 2>/dev/null)
+    STREAM_INFO=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" XINFO STREAM "$stream_name" 2>/dev/null)
 
     if [ $? -ne 0 ]; then
         echo "⚠️  Stream does not exist. Creating initial stream entry..."
         # Create stream with an initial message
-        redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASSWORD" XADD "$stream_name" "*" \
+        redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" XADD "$stream_name" "*" \
             init "true" \
             event_type "SYSTEM_INIT" \
             timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -57,7 +57,7 @@ init_stream_and_group() {
 
     # Check if consumer group exists, create if it doesn't
     echo "👥 Checking consumer group: $consumer_group"
-    GROUP_INFO=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASSWORD" XINFO GROUPS "$stream_name" 2>/dev/null)
+    GROUP_INFO=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" XINFO GROUPS "$stream_name" 2>/dev/null)
 
     if [ $? -ne 0 ]; then
         echo "⚠️  Consumer group does not exist. Creating group..."

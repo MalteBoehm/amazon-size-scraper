@@ -85,5 +85,9 @@ RUN chmod +x /app/entrypoint.sh
 RUN echo '#!/bin/sh\nexec ./lifecycle-consumer-binary "$@"' > /app/lifecycle-consumer && \
     chmod +x /app/lifecycle-consumer
 
+# Create redis job consumer entrypoint
+RUN echo '#!/bin/sh\nexec ./redis-job-consumer-binary "$@"' > /app/redis-job-consumer && \
+    chmod +x /app/redis-job-consumer
+
 # Run the application
 CMD ["/app/entrypoint.sh"]

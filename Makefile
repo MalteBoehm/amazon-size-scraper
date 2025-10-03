@@ -10,6 +10,8 @@ build:
 	@echo "Building..."
 	@go build -o $(BINARY_PATH) $(MAIN_PATH)
 	@go build -o bin/size-scraper cmd/size-scraper/main.go
+	@go build -o bin/lifecycle-consumer-binary cmd/lifecycle-consumer/main.go
+	@go build -o bin/redis-job-consumer-binary cmd/redis-job-consumer/main.go
 
 # Build job-based scraper
 build-job-scraper:
