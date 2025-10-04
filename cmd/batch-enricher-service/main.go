@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/MalteBoehm/tall-affiliate-common/pkg/constants"
 	_ "github.com/lib/pq"
 	"github.com/maltedev/amazon-size-scraper/internal/redis"
 	goredis "github.com/redis/go-redis/v9"
@@ -88,7 +89,7 @@ func loadConfig() *Config {
 		RedisPort:     getEnv("REDIS_PORT", "6379"),
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),
 		RedisDB:       parseInt(getEnv("REDIS_DB", "0"), 0),
-		StreamName:    getEnv("REDIS_STREAM_NAME", "stream:product_lifecycle"),
+		StreamName:    getEnv("REDIS_STREAM_NAME", constants.StreamProductLifecycle),
 	}
 
 	// Parse command line flags (override env vars)
@@ -342,7 +343,7 @@ func main() {
 	producer := redis.NewStreamProducer(redisClient, config.StreamName)
 
 	// Create consumer group if it doesn't exist
-	if err := producer.CreateConsumerGroup(context.Background(), "pa_api_enrichment"); err != nil {
+	if err := producer.CreateConsumerGroup(context.Background(), constants.GroupProductLifecycle); err != nil {
 		logger.Warn("consumer group creation", "error", err)
 	}
 

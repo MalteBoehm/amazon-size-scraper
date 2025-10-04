@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -12,7 +13,6 @@ import (
 	"time"
 
 	"github.com/maltedev/amazon-scraper/internal/database"
-	"github.com/MalteBoehm/tall-affiliate-common/pkg/constants"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -122,8 +122,8 @@ func main() {
 
 	// Create consumer
 	consumer := &JobConsumer{
-		redis: rdb,
-		db:    db,
+		redis:  rdb,
+		db:     db,
 		logger: logger,
 	}
 
@@ -159,8 +159,8 @@ func getEnv(key, defaultValue string) string {
 }
 
 func (c *JobConsumer) Run(ctx context.Context) error {
-	streamKey := "stream:scraper_jobs"  // This is where SCRAPER_JOB_REQUESTED events are stored
-	consumerGroup := "group:scraper_jobs"  // Create appropriate consumer group
+	streamKey := "stream:scraper_jobs"    // This is where SCRAPER_JOB_REQUESTED events are stored
+	consumerGroup := "group:scraper_jobs" // Create appropriate consumer group for scraper jobs
 	consumerName := "redis-job-consumer-1"
 
 	// DEBUG: Log actual stream key and check if stream exists

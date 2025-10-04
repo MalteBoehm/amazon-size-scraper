@@ -12,9 +12,9 @@ REDIS_PASSWORD=""
 
 # Stream and group configuration
 PRODUCT_STREAM="stream:product_lifecycle"
-PRODUCT_CONSUMER_GROUP="lifecycle-consumer-group"
+PRODUCT_CONSUMER_GROUP="group:product_lifecycle"
 SCRAPER_STREAM="stream:scraper_jobs"
-SCRAPER_CONSUMER_GROUP="scraper-consumer-group"
+SCRAPER_CONSUMER_GROUP="group:scraper_jobs"
 
 # Test Redis connection
 echo "📡 Testing Redis connection..."
