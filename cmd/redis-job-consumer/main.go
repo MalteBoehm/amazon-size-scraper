@@ -159,28 +159,20 @@ func getEnv(key, defaultValue string) string {
 }
 
 func (c *JobConsumer) Run(ctx context.Context) error {
-	streamKey := constants.StreamProductLifecycle
-	consumerGroup := "redis-job-consumer-group"
-	consumerName := "consumer-1"
+	streamKey := "stream:scraper_jobs"  // This is where SCRAPER_JOB_REQUESTED events are stored
+	consumerGroup := "group:scraper_jobs"  // Create appropriate consumer group
+	consumerName := "redis-job-consumer-1"
 
 	// DEBUG: Log actual stream key and check if stream exists
 	c.logger.Info("DEBUG: Consumer configuration",
-		"constants_stream", constants.StreamProductLifecycle,
-		"final_stream_key", streamKey)
+		"stream_key", streamKey,
+		"consumer_group", consumerGroup)
 
 	// Check if stream exists
 	streamInfo, err := c.redis.XInfoStream(ctx, streamKey).Result()
 	if err != nil {
 		c.logger.Error("DEBUG: Stream does not exist", "stream", streamKey, "error", err)
-		// Try alternative stream names
-		alternativeStreams := []string{"stream:scraper_jobs"}
-		for _, altStream := range alternativeStreams {
-			if altInfo, altErr := c.redis.XInfoStream(ctx, altStream).Result(); altErr == nil {
-				c.logger.Info("DEBUG: Found alternative stream", "stream", altStream, "length", altInfo.Length)
-				streamKey = altStream
-				break
-			}
-		}
+		return fmt.Errorf("stream %s does not exist: %w", streamKey, err)
 	} else {
 		c.logger.Info("DEBUG: Stream exists", "stream", streamKey, "length", streamInfo.Length)
 	}
