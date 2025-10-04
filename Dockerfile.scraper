@@ -13,8 +13,10 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the scraper binary
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o scraper ./cmd/scraper
+# Build all binaries needed for the application
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o size-scraper ./cmd/scraper
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o lifecycle-consumer ./cmd/lifecycle-consumer
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o redis-job-consumer ./cmd/redis-job-consumer
 
 # Use a minimal alpine image
 FROM alpine:3.18
@@ -27,8 +29,10 @@ RUN apk add --no-cache ca-certificates tzdata chromium nss freetype freetype-dev
 # Create necessary directories
 RUN mkdir -p logs/html proxy_data
 
-# Copy the binary from the builder stage
-COPY --from=builder /app/scraper .
+# Copy all binaries from the builder stage
+COPY --from=builder /app/size-scraper .
+COPY --from=builder /app/lifecycle-consumer .
+COPY --from=builder /app/redis-job-consumer .
 
 # Copy entrypoint script
 COPY entrypoint.sh .

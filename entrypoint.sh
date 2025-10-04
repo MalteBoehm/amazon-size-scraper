@@ -35,7 +35,7 @@ done
 echo "[ENTRYPOINT] ✅ PostgreSQL is up"
 
 # Wait for Redis (if Redis is configured)
-if [ ! -z "$REDIS_ADDR" ] || [ "$SERVICE_NAME" = "lifecycle-consumer" ]; then
+if [ ! -z "$REDIS_ADDR" ] || [ "$SERVICE_NAME" = "lifecycle-consumer" ] || [ "$SERVICE_NAME" = "redis-job-consumer" ]; then
     # Parse Redis address
     REDIS_HOST="redis"
     REDIS_PORT="6379"
@@ -74,6 +74,8 @@ sleep 10
 BINARY="./size-scraper"
 if [ "$SERVICE_NAME" = "lifecycle-consumer" ]; then
     BINARY="./lifecycle-consumer"
+elif [ "$SERVICE_NAME" = "redis-job-consumer" ]; then
+    BINARY="./redis-job-consumer"
 elif [ -f "./amazon-scraper" ]; then
     BINARY="./amazon-scraper"
 fi
