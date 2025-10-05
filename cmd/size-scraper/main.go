@@ -33,8 +33,8 @@ func main() {
 		scrapeOnly    = flag.Bool("scrape-only", false, "Only scrape products, don't crawl search results")
         // Default proxy list path aligned with docker-compose and production mounts
         proxyListFile = flag.String("proxy-list", getEnv("PROXY_LIST_FILE", "/app/proxy_data/proxy_list"), "Path to proxy list file")
-        // Best-practice default: proxies are opt-in; enable only when explicitly configured
-        useProxies    = flag.Bool("use-proxies", getEnvBool("USE_PROXIES", false), "Enable proxy rotation")
+        // Default: enable proxies unless explicitly disabled
+        useProxies    = flag.Bool("use-proxies", getEnvBool("USE_PROXIES", true), "Enable proxy rotation")
 		// TODO: Re-enable when browser pool is implemented
 		// poolSize      = flag.Int("pool-size", getEnvInt("BROWSER_POOL_SIZE", 3), "Number of browsers in pool")
 		// maxRequests   = flag.Int("max-requests", getEnvInt("MAX_REQUESTS_PER_BROWSER", 20), "Max requests before recreating browser")
