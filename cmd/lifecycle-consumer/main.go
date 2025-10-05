@@ -243,6 +243,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 }
 
 func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error {
+    var asin string
 	// DEBUG: Log all incoming message details
 	c.logger.Info("DEBUG: Processing message",
 		"message_id", msg.ID,
@@ -312,18 +313,28 @@ func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error
 		}
 	}
 
-	if !ok {
-		return fmt.Errorf("missing payload in event")
-	}
+    if !ok {
+        // Fallback: some lifecycle events publish fields directly (asin, title, detail_page_url)
+        if directASIN, has := msg.Values["asin"].(string); has && directASIN != "" {
+            asin = directASIN
+            // Build minimal dimensions placeholder
+            c.logger.Info("Using direct event fields (no payload)", "asin", asin)
+        } else {
+            return fmt.Errorf("missing payload in event")
+        }
+    }
 
-	// Parse payload
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(payloadStr), &payload); err != nil {
-		return fmt.Errorf("failed to parse payload: %w", err)
-	}
+    // Parse payload if available
+    var payload map[string]interface{}
+    if payloadStr != "" {
+        if err := json.Unmarshal([]byte(payloadStr), &payload); err != nil {
+            return fmt.Errorf("failed to parse payload: %w", err)
+        }
+    } else {
+        payload = map[string]interface{}{}
+    }
 
 	// For catalog.product_enrichment_requested.v1 events, extract ASIN from nested data
-	var asin string
 	if actualEventType == "catalog.product_enrichment_requested.v1" {
 		// Try to get ASIN from nested structure
 		if data, exists := payload["data"].(map[string]interface{}); exists {
@@ -344,9 +355,20 @@ func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error
 		}
 	}
 
-	if asin == "" {
-		return fmt.Errorf("missing ASIN in payload")
-	}
+    if asin == "" {
+        if v, ok := payload["asin"].(string); ok {
+            asin = v
+        }
+    }
+    if asin == "" {
+        // Last resort: direct field again
+        if v, ok := msg.Values["asin"].(string); ok {
+            asin = v
+        }
+    }
+    if asin == "" {
+        return fmt.Errorf("missing ASIN in payload/event")
+    }
 
 	c.logger.Info("Extracted ASIN from payload", "asin", asin, "event_type", actualEventType)
 
@@ -598,8 +620,8 @@ func (c *Consumer) updateProduct(ctx context.Context, asin string, dimensions *S
 
 func (c *Consumer) publishProductCreated(ctx context.Context, asin string, dimensions *SizeChartResponse) error {
 	// Get product details from database
-	var title, url string
-	var brand *string // Allow NULL
+    var title, url string
+    var brand *string // Allow NULL
 	err := c.db.QueryRow(ctx,
 		"SELECT title, brand, detail_page_url FROM product WHERE asin = $1",
 		asin,
