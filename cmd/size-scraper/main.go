@@ -117,24 +117,18 @@ func main() {
 	// Proxy setup
 	var proxyManager *proxy.ProxyManager
     if *useProxies {
-		var err error
-		proxyManager, err = proxy.NewProxyManager(*proxyListFile, logger)
-		if err != nil {
-			logger.Error("failed to initialize proxy manager", "error", err, "file", *proxyListFile)
-            // If a custom file was provided, fail fast; otherwise fallback to no proxies
-            if *proxyListFile != "/app/proxy_data/proxy_list" {
-				// User specified a custom file, fail
-				os.Exit(1)
-			}
-			// Default file missing, continue without proxies
-			logger.Warn("continuing without proxy rotation")
-			*useProxies = false
-		} else {
-			logger.Info("proxy manager initialized",
-				"total_proxies", proxyManager.GetProxyCount(),
-				"healthy_proxies", proxyManager.GetHealthyProxyCount())
-		}
-	}
+        var err error
+        proxyManager, err = proxy.NewProxyManager(*proxyListFile, logger)
+        if err != nil {
+            logger.Error("failed to initialize proxy manager", "error", err, "file", *proxyListFile)
+            logger.Warn("continuing without proxy rotation")
+            *useProxies = false
+        } else {
+            logger.Info("proxy manager initialized",
+                "total_proxies", proxyManager.GetProxyCount(),
+                "healthy_proxies", proxyManager.GetHealthyProxyCount())
+        }
+    }
 
 	// Browser setup
 	browserOpts := browser.DefaultOptions()

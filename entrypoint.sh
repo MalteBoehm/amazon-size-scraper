@@ -15,6 +15,8 @@ echo "DB_NAME=${DB_NAME:-amazon_scraper}"
 echo "REDIS_ADDR=${REDIS_ADDR:-redis:6379}"
 echo "DEBUG_MODE=${DEBUG_MODE:-false}"
 echo "BROWSER_HEADLESS=${BROWSER_HEADLESS:-true}"
+echo "USE_PROXIES=${USE_PROXIES:-false}"
+echo "PROXY_LIST_FILE=${PROXY_LIST_FILE}"
 
 # Determine which service to run based on the script name or SERVICE_TYPE env var
 SERVICE_NAME=$(basename "$0")
@@ -82,6 +84,22 @@ if [ "${USE_PROXIES}" = "true" ] && [ -n "${PROXY_LIST_FILE}" ] && [ -d "${PROXY
             echo "[ENTRYPOINT] Normalized PROXY_LIST_FILE to ${PROXY_LIST_FILE}"
         else
             echo "[ENTRYPOINT] WARN: proxy directory mounted but no file found; disabling proxies"
+            export USE_PROXIES=false
+        fi
+    fi
+fi
+
+# Validate proxy list file or fallback/disable
+if [ "${USE_PROXIES}" = "true" ]; then
+    if [ -z "${PROXY_LIST_FILE}" ] || [ ! -f "${PROXY_LIST_FILE}" ]; then
+        if [ -f "/app/proxy_data/proxy_list" ]; then
+            export PROXY_LIST_FILE="/app/proxy_data/proxy_list"
+            echo "[ENTRYPOINT] Using fallback PROXY_LIST_FILE=${PROXY_LIST_FILE}"
+        elif [ -f "/app/proxy_list" ]; then
+            export PROXY_LIST_FILE="/app/proxy_list"
+            echo "[ENTRYPOINT] Using fallback PROXY_LIST_FILE=${PROXY_LIST_FILE}"
+        else
+            echo "[ENTRYPOINT] Proxy list not found; disabling proxies"
             export USE_PROXIES=false
         fi
     fi
