@@ -43,8 +43,7 @@ RUN apk add --no-cache ca-certificates tzdata chromium nss freetype freetype-dev
     && chmod +x entrypoint.sh \
     && ln -sf /app/size-scraper /app/amazon-scraper
 
-# Copy proxy list into image (per request)
-COPY proxy_list /app/proxy_data/proxy_list
+## Note: Do not bake proxy_list into /app/proxy_data/proxy_list to avoid dir↔file mount conflicts with Coolify
 
 # Expose port
 EXPOSE 8084

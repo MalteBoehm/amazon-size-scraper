@@ -70,6 +70,23 @@ echo "[ENTRYPOINT] DEBUG: Database name that will be used: ${DB_NAME}"
 echo "[ENTRYPOINT] DEBUG: Full database connection info: ${DB_HOST}:${DB_PORT}/${DB_NAME}"
 sleep 10
 
+# Normalize proxy list path if a directory was mounted
+if [ "${USE_PROXIES}" = "true" ] && [ -n "${PROXY_LIST_FILE}" ] && [ -d "${PROXY_LIST_FILE}" ]; then
+    if [ -f "${PROXY_LIST_FILE}/proxy_list" ]; then
+        export PROXY_LIST_FILE="${PROXY_LIST_FILE}/proxy_list"
+        echo "[ENTRYPOINT] Normalized PROXY_LIST_FILE to ${PROXY_LIST_FILE}"
+    else
+        FIRST_FILE=$(ls -1 "${PROXY_LIST_FILE}" 2>/dev/null | head -n1)
+        if [ -n "$FIRST_FILE" ] && [ -f "${PROXY_LIST_FILE}/${FIRST_FILE}" ]; then
+            export PROXY_LIST_FILE="${PROXY_LIST_FILE}/${FIRST_FILE}"
+            echo "[ENTRYPOINT] Normalized PROXY_LIST_FILE to ${PROXY_LIST_FILE}"
+        else
+            echo "[ENTRYPOINT] WARN: proxy directory mounted but no file found; disabling proxies"
+            export USE_PROXIES=false
+        fi
+    fi
+fi
+
 # Check which binary to execute
 BINARY="./size-scraper"
 if [ "$SERVICE_NAME" = "lifecycle-consumer" ]; then
