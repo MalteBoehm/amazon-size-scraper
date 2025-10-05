@@ -48,7 +48,7 @@ services:
       SCRAPER_HTML_LOG_DIR: ${SCRAPER_HTML_LOG_DIR:-/app/logs/html}
 
       # Proxy Configuration
-      USE_PROXIES: ${USE_PROXIES:-false}
+      USE_PROXIES: ${USE_PROXIES:-true}
       PROXY_LIST_FILE: ${PROXY_LIST_FILE:-/app/proxy_data/proxy_list}
 
       # Server Configuration
