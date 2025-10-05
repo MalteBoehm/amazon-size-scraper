@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/maltedev/amazon-scraper/internal/database"
+    "github.com/maltedev/amazon-size-scraper/internal/database"
 	"github.com/redis/go-redis/v9"
 )
 

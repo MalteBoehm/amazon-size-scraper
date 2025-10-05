@@ -14,7 +14,8 @@ RUN go mod download
 COPY . .
 
 # Build all binaries needed for the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o size-scraper ./cmd/scraper
+# Use the historical main path for size-scraper to match previous deployments
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o size-scraper ./cmd/size-scraper
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o lifecycle-consumer ./cmd/lifecycle-consumer
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o redis-job-consumer ./cmd/redis-job-consumer
 
@@ -24,7 +25,8 @@ FROM alpine:3.18
 WORKDIR /app
 
 # Install dependencies
-RUN apk add --no-cache ca-certificates tzdata chromium nss freetype freetype-dev harfbuzz ttf-freefont
+# netcat-openbsd provides reliable `nc -z` for health waits in entrypoint
+RUN apk add --no-cache ca-certificates tzdata chromium nss freetype freetype-dev harfbuzz ttf-freefont netcat-openbsd
 
 # Create necessary directories
 RUN mkdir -p logs/html proxy_data
@@ -39,6 +41,9 @@ COPY entrypoint.sh .
 
 # Make entrypoint executable
 RUN chmod +x entrypoint.sh
+
+# Backwards compatibility: some deployments expect /app/amazon-scraper
+RUN ln -sf /app/size-scraper /app/amazon-scraper
 
 # Expose port
 EXPOSE 8084
