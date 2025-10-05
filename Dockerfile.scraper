@@ -45,8 +45,6 @@ RUN apk add --no-cache ca-certificates tzdata chromium nss freetype freetype-dev
 
 # Copy proxy list into image (per request)
 COPY proxy_list /app/proxy_data/proxy_list
-# Backwards compatibility path
-COPY proxy_list /app/proxy_list
 
 # Expose port
 EXPOSE 8084
