@@ -40,7 +40,7 @@ COPY entrypoint.sh .
 
 # Install runtime deps, prepare filesystem, set permissions and legacy symlink in a single layer
 # netcat-openbsd provides reliable `nc -z` for health waits in entrypoint
-RUN apk add --no-cache ca-certificates tzdata chromium nss freetype freetype-dev harfbuzz ttf-freefont netcat-openbsd \
+RUN apk add --no-cache ca-certificates tzdata chromium nss freetype freetype-dev harfbuzz ttf-freefont netcat-openbsd nodejs \
     && mkdir -p logs/html proxy_data \
     && chmod +x entrypoint.sh \
     && ln -sf /app/size-scraper /app/amazon-scraper
@@ -52,3 +52,7 @@ EXPOSE 8084
 
 # Set entrypoint
 ENTRYPOINT ["./entrypoint.sh"]
+
+# Ensure playwright-go uses Alpine's node and the preinstalled driver cache
+ENV PLAYWRIGHT_NODEJS_PATH=/usr/bin/node
+ENV PLAYWRIGHT_DRIVER_PATH=/root/.cache/ms-playwright-go/1.52.0
