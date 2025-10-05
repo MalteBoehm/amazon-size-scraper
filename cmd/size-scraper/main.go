@@ -31,8 +31,10 @@ func main() {
 		headless      = flag.Bool("headless", getEnvBool("HEADLESS", true), "Run browser in headless mode")
 		concurrent    = flag.Int("concurrent", getEnvInt("CONCURRENT_SCRAPERS", 1), "Number of concurrent product scrapers")
 		scrapeOnly    = flag.Bool("scrape-only", false, "Only scrape products, don't crawl search results")
-		proxyListFile = flag.String("proxy-list", getEnv("PROXY_LIST_FILE", "proxy_list"), "Path to proxy list file")
-		useProxies    = flag.Bool("use-proxies", getEnvBool("USE_PROXIES", true), "Enable proxy rotation")
+        // Default proxy list path aligned with docker-compose and production mounts
+        proxyListFile = flag.String("proxy-list", getEnv("PROXY_LIST_FILE", "/app/proxy_data/proxy_list"), "Path to proxy list file")
+        // Best-practice default: proxies are opt-in; enable only when explicitly configured
+        useProxies    = flag.Bool("use-proxies", getEnvBool("USE_PROXIES", false), "Enable proxy rotation")
 		// TODO: Re-enable when browser pool is implemented
 		// poolSize      = flag.Int("pool-size", getEnvInt("BROWSER_POOL_SIZE", 3), "Number of browsers in pool")
 		// maxRequests   = flag.Int("max-requests", getEnvInt("MAX_REQUESTS_PER_BROWSER", 20), "Max requests before recreating browser")
@@ -114,12 +116,13 @@ func main() {
 
 	// Proxy setup
 	var proxyManager *proxy.ProxyManager
-	if *useProxies {
+    if *useProxies {
 		var err error
 		proxyManager, err = proxy.NewProxyManager(*proxyListFile, logger)
 		if err != nil {
 			logger.Error("failed to initialize proxy manager", "error", err, "file", *proxyListFile)
-			if *proxyListFile != "proxy_list" {
+            // If a custom file was provided, fail fast; otherwise fallback to no proxies
+            if *proxyListFile != "/app/proxy_data/proxy_list" {
 				// User specified a custom file, fail
 				os.Exit(1)
 			}
