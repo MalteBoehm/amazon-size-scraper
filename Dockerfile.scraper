@@ -3,36 +3,32 @@ FROM golang:1.25.0-trixie AS builder
 
 WORKDIR /app
 
-# Install dependencies
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
-
-# Copy go.mod and go.sum
+# Copy go.mod and go.sum first for better caching, then download deps in a single layer
 COPY go.mod go.sum ./
-RUN go mod download
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/* \
+    && go mod download
 
 # Copy source code
 COPY . .
 
-# Build all binaries needed for the application
+# Build all binaries and install Playwright in a single layer to minimize RUN invocations
 # Use the historical main path for size-scraper to match previous deployments
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o size-scraper ./cmd/size-scraper
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o lifecycle-consumer ./cmd/lifecycle-consumer
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o redis-job-consumer ./cmd/redis-job-consumer
-
-# Install Playwright Chromium for playwright-go and cache browsers in builder stage
-RUN go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5200.0 install chromium
+RUN set -eux; \
+    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o size-scraper ./cmd/size-scraper; \
+    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o lifecycle-consumer ./cmd/lifecycle-consumer; \
+    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o redis-job-consumer ./cmd/redis-job-consumer; \
+    go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5200.0 install chromium
 
 # Use a minimal alpine image
 FROM alpine:3.18
 
 WORKDIR /app
 
-# Install dependencies
+# Install runtime dependencies and prepare filesystem in one layer
 # netcat-openbsd provides reliable `nc -z` for health waits in entrypoint
-RUN apk add --no-cache ca-certificates tzdata chromium nss freetype freetype-dev harfbuzz ttf-freefont netcat-openbsd
-
-# Create necessary directories
-RUN mkdir -p logs/html proxy_data
+RUN apk add --no-cache ca-certificates tzdata chromium nss freetype freetype-dev harfbuzz ttf-freefont netcat-openbsd \
+    && mkdir -p logs/html proxy_data
 
 # Copy all binaries from the builder stage
 COPY --from=builder /app/size-scraper .
@@ -42,14 +38,10 @@ COPY --from=builder /app/redis-job-consumer .
 # Copy Playwright browser cache from builder
 COPY --from=builder /root/.cache/ms-playwright /root/.cache/ms-playwright
 
-# Copy entrypoint script
+# Copy entrypoint script and set permissions; add legacy symlink in same layer to reduce RUN count
 COPY entrypoint.sh .
-
-# Make entrypoint executable
-RUN chmod +x entrypoint.sh
-
-# Backwards compatibility: some deployments expect /app/amazon-scraper
-RUN ln -sf /app/size-scraper /app/amazon-scraper
+RUN chmod +x entrypoint.sh \
+    && ln -sf /app/size-scraper /app/amazon-scraper
 
 # Expose port
 EXPOSE 8084
