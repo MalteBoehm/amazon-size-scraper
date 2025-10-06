@@ -1,58 +1,37 @@
-# Build stage
-FROM golang:1.24-alpine AS builder
-
-# Install git for go mod download
-RUN apk add --no-cache git
-
-# Set working directory
-WORKDIR /app
-# Ensure the correct Go toolchain is used when go.mod requires a higher minor version
-ENV GOTOOLCHAIN=auto
-
-
-# Using external tall-affiliate-common repository - no local copy needed
-
-# Copy go mod files from the current module
-COPY go.mod go.sum ./
-
-# Download dependencies
-RUN go mod download
-
-# Copy source code of the current module
-COPY . .
-
-# Build the application in builder stage (size-scraper binary)
-RUN CGO_ENABLED=0 GOOS=linux go build -o size-scraper ./cmd/size-scraper
-# Separate stage to install Playwright-Go driver on Debian (glibc)
-FROM golang:1.24 as driver-installer
-ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
-RUN go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5200.0 install chromium
-
-
-
-# Runtime stage
 FROM mcr.microsoft.com/playwright:v1.52.0-noble
 
-# Playwright base image already includes required browser dependencies
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=Etc/UTC \
+    GOROOT=/usr/local/go \
+    GOPATH=/go \
+    PATH=/usr/local/go/bin:/go/bin:$PATH \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-
-
-# Set working directory
 WORKDIR /app
 
-# Copy Playwright browsers/driver from Debian-based installer stage into runtime
-ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
-COPY --from=driver-installer /root/.cache/ms-playwright /root/.cache/ms-playwright
-COPY --from=driver-installer /root/.cache/ms-playwright-go /root/.cache/ms-playwright-go
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates tzdata git wget curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -fs /usr/share/zoneinfo/$TZ /etc/localtime \
+    && dpkg-reconfigure -f noninteractive tzdata \
+    && mkdir -p logs/html proxy_data
 
-# Copy the binary from builder
-COPY --from=builder /app/size-scraper .
+# Install Go toolchain (single-stage to minimize Coolify ARG injection)
+ENV GO_VERSION=1.25.1
+RUN curl -fsSL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz -o /tmp/go.tgz \
+    && tar -C /usr/local -xzf /tmp/go.tgz \
+    && rm -f /tmp/go.tgz
 
-# Copy any necessary config files
-COPY --from=builder /app/configs ./configs
+# Cache deps first
+COPY go.mod go.sum ./
+RUN go mod download
 
-# Expose port
+# Copy source and build
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/size-scraper ./cmd/size-scraper
+
+# Install Playwright-Go driver and ensure Chromium is available
+RUN go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5200.0 install chromium || true
+
 EXPOSE 8084
-
-# Run the application
-CMD ["./size-scraper"]
+CMD ["/app/size-scraper"]
