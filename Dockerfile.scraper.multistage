@@ -7,6 +7,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/usr/local/go/bin:/go/bin:$PATH \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
+# Install Node.js for npm playwright install
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs
+
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -31,7 +35,23 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /app/size-scraper ./cmd/size-scraper
 
 # Install Playwright-Go driver and ensure Chromium is available
-RUN go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5200.0 install chromium || true
+RUN echo "Installing Playwright browsers..." && \
+    go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5200.0 install chromium && \
+    echo "Playwright installation completed" && \
+    ls -la /ms-playwright/ || echo "Playwright browsers path not found"
+
+# Add debugging for browser installation
+RUN echo "Checking for Chromium executables..." && \
+    find /ms-playwright -name "chrome" -type f 2>/dev/null || echo "No chrome binary found" && \
+    find /ms-playwright -name "headless_shell" -type f 2>/dev/null || echo "No headless_shell found"
+
+# Install Playwright browsers manually as fallback
+RUN echo "Manual Playwright browser installation..." && \
+    mkdir -p /ms-playwright && \
+    npx playwright install chromium --with-deps || echo "npm playwright install failed"
+
+# Set proper permissions for Playwright browsers
+RUN chmod -R 755 /ms-playwright || echo "Permission setting failed"
 
 EXPOSE 8084
 CMD ["/app/size-scraper"]

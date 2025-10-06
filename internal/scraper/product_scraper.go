@@ -136,13 +136,13 @@ func (ps *ProductScraper) ScrapeProduct(ctx context.Context, asin string) error 
 
 	// Validate size table for realistic measurements
 	isValid, invalidReasons := database.ValidateSizeTableWithDetails(sizeTable)
-	
+
 	if !isValid {
 		// Log detailed reasons for skipping
 		ps.logger.Info("skipping product - invalid size table",
 			"asin", asin,
 			"reasons", invalidReasons)
-		
+
 		// Determine the primary reason for the error message
 		errorMsg := "Invalid size table"
 		if len(invalidReasons) > 0 {
@@ -157,7 +157,7 @@ func (ps *ProductScraper) ScrapeProduct(ctx context.Context, asin string) error 
 						"issue", reason)
 				}
 			}
-			
+
 			if hasUnrealistic {
 				errorMsg = "Unrealistic measurements in size table"
 			} else if contains(invalidReasons, "chest_measurements") {
@@ -166,7 +166,7 @@ func (ps *ProductScraper) ScrapeProduct(ctx context.Context, asin string) error 
 				errorMsg = "No length measurement in size table"
 			}
 		}
-		
+
 		ps.updateProductError(ctx, asin, errorMsg)
 		return nil
 	}
@@ -610,6 +610,35 @@ func contains(slice []string, item string) bool {
 
 // ScrapeAllPending scrapes all pending products
 func (ps *ProductScraper) ScrapeAllPending(ctx context.Context, limit int) error {
+	// Add detailed logging to understand why no products are found
+	ps.logger.Info("starting ScrapeAllPending", "limit", limit)
+
+	// First, let's check the database connection and table status
+	if ps.db != nil {
+		// Check total product counts by status
+		counts, err := ps.db.CountProductsByStatus(ctx)
+		if err != nil {
+			ps.logger.Error("failed to get product counts", "error", err)
+		} else {
+			ps.logger.Info("product status counts",
+				"pending", counts[database.StatusPending],
+				"completed", counts[database.StatusCompleted],
+				"failed", counts[database.StatusFailed])
+		}
+
+		// Check if there are any products at all using a simple query
+		var totalCount int
+		row := ps.db.QueryRow(ctx, "SELECT COUNT(*) FROM products")
+		err = row.Scan(&totalCount)
+		if err != nil {
+			ps.logger.Error("failed to get total product count", "error", err)
+		} else {
+			ps.logger.Info("total products in database", "count", totalCount)
+		}
+	} else {
+		ps.logger.Warn("database connection is nil")
+	}
+
 	for {
 		// Get pending products
 		products, err := ps.db.GetPendingProducts(ctx, limit)
@@ -618,7 +647,7 @@ func (ps *ProductScraper) ScrapeAllPending(ctx context.Context, limit int) error
 		}
 
 		if len(products) == 0 {
-			ps.logger.Info("no pending products found")
+			ps.logger.Info("no pending products found", "attempted_limit", limit)
 			break
 		}
 
@@ -640,6 +669,3 @@ func (ps *ProductScraper) ScrapeAllPending(ctx context.Context, limit int) error
 
 	return nil
 }
-
-
-

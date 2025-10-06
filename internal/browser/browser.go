@@ -1,15 +1,15 @@
 package browser
 
 import (
-    "fmt"
-    "log/slog"
-    "os"
-    "path/filepath"
-    "sort"
-    "strings"
-    "time"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
 
-    "github.com/playwright-community/playwright-go"
+	"github.com/playwright-community/playwright-go"
 )
 
 type Browser struct {
@@ -20,18 +20,18 @@ type Browser struct {
 }
 
 type Options struct {
-	Headless        bool
-	Timeout         time.Duration
-	UserAgent       string
-	ViewportWidth   int
-	ViewportHeight  int
-	AcceptLanguage  string
-	TimezoneID      string
-	Locale          string
-	ProxyServer     string
-	ProxyUsername   string
-	ProxyPassword   string
-	ExtraHeaders    map[string]string
+	Headless       bool
+	Timeout        time.Duration
+	UserAgent      string
+	ViewportWidth  int
+	ViewportHeight int
+	AcceptLanguage string
+	TimezoneID     string
+	Locale         string
+	ProxyServer    string
+	ProxyUsername  string
+	ProxyPassword  string
+	ExtraHeaders   map[string]string
 }
 
 func DefaultOptions() *Options {
@@ -57,10 +57,28 @@ func New(opts *Options) (*Browser, error) {
 		opts = DefaultOptions()
 	}
 
+	logger := slog.Default().With("component", "browser")
+	logger.Info("initializing playwright", "playwright_browsers_path", os.Getenv("PLAYWRIGHT_BROWSERS_PATH"))
+
+	// Install drivers if needed
+	if err := playwright.Install(); err != nil {
+		logger.Warn("playwright install failed, continuing anyway", "error", err)
+	}
+
+	// Check if Chromium binary exists before attempting to start playwright
+	chromiumPath := findChromiumExecutable()
+	if chromiumPath == "" {
+		logger.Error("chromium executable not found", "search_path", os.Getenv("PLAYWRIGHT_BROWSERS_PATH"))
+		return nil, fmt.Errorf("chromium executable not found in PLAYWRIGHT_BROWSERS_PATH")
+	}
+	logger.Info("found chromium executable", "path", chromiumPath)
+
 	pw, err := playwright.Run()
 	if err != nil {
+		logger.Error("failed to start playwright", "error", err)
 		return nil, fmt.Errorf("failed to start playwright: %w", err)
 	}
+	logger.Info("playwright started successfully")
 
 	launchOpts := playwright.BrowserTypeLaunchOptions{
 		Headless: &opts.Headless,
@@ -75,22 +93,22 @@ func New(opts *Options) (*Browser, error) {
 		},
 	}
 
-    // Prefer the full Chromium binary from Playwright image to avoid headless_shell ENOENT
-    if execPath := findChromiumExecutable(); execPath != "" {
-        launchOpts.ExecutablePath = &execPath
-    }
+	// Prefer the full Chromium binary from Playwright image to avoid headless_shell ENOENT
+	if execPath := findChromiumExecutable(); execPath != "" {
+		launchOpts.ExecutablePath = &execPath
+	}
 
 	if opts.ProxyServer != "" {
 		proxy := &playwright.Proxy{
 			Server: opts.ProxyServer,
 		}
-		
+
 		// Add authentication if provided
 		if opts.ProxyUsername != "" && opts.ProxyPassword != "" {
 			proxy.Username = &opts.ProxyUsername
 			proxy.Password = &opts.ProxyPassword
 		}
-		
+
 		launchOpts.Proxy = proxy
 	}
 
@@ -101,11 +119,11 @@ func New(opts *Options) (*Browser, error) {
 	}
 
 	contextOpts := playwright.BrowserNewContextOptions{
-		UserAgent:      &opts.UserAgent,
-		AcceptDownloads: playwright.Bool(false),
+		UserAgent:         &opts.UserAgent,
+		AcceptDownloads:   playwright.Bool(false),
 		JavaScriptEnabled: playwright.Bool(true), // Explicitly enable JavaScript
-		Locale:         &opts.Locale,
-		TimezoneId:     &opts.TimezoneID,
+		Locale:            &opts.Locale,
+		TimezoneId:        &opts.TimezoneID,
 		Viewport: &playwright.Size{
 			Width:  opts.ViewportWidth,
 			Height: opts.ViewportHeight,
@@ -130,29 +148,49 @@ func New(opts *Options) (*Browser, error) {
 
 // findChromiumExecutable returns the best available Chromium binary path.
 func findChromiumExecutable() string {
-    base := os.Getenv("PLAYWRIGHT_BROWSERS_PATH")
-    if base == "" {
-        base = "/ms-playwright"
-    }
-    // Prefer full chromium over headless shell
-    matches, _ := filepath.Glob(filepath.Join(base, "chromium-*", "chrome-linux", "chrome"))
-    if len(matches) > 0 {
-        sort.Strings(matches)
-        p := matches[len(matches)-1]
-        if st, err := os.Stat(p); err == nil && !st.IsDir() {
-            return p
-        }
-    }
-    // Fallback to headless_shell if present
-    hs, _ := filepath.Glob(filepath.Join(base, "chromium_headless_shell-*", "chrome-linux", "headless_shell"))
-    if len(hs) > 0 {
-        sort.Strings(hs)
-        p := hs[len(hs)-1]
-        if st, err := os.Stat(p); err == nil && !st.IsDir() {
-            return p
-        }
-    }
-    return ""
+	base := os.Getenv("PLAYWRIGHT_BROWSERS_PATH")
+	if base == "" {
+		base = "/ms-playwright"
+	}
+
+	logger := slog.Default().With("component", "browser")
+	logger.Info("searching for chromium executable", "base_path", base)
+
+	// Prefer full chromium over headless shell
+	matches, _ := filepath.Glob(filepath.Join(base, "chromium-*", "chrome-linux", "chrome"))
+	logger.Info("chromium search results", "matches", len(matches), "pattern", filepath.Join(base, "chromium-*", "chrome-linux", "chrome"))
+
+	if len(matches) > 0 {
+		sort.Strings(matches)
+		p := matches[len(matches)-1]
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			logger.Info("found chromium executable", "path", p)
+			return p
+		} else {
+			logger.Warn("chromium file exists but stat failed", "path", p, "error", err)
+		}
+	}
+
+	// Fallback to headless_shell if present
+	hs, _ := filepath.Glob(filepath.Join(base, "chromium_headless_shell-*", "chrome-linux", "headless_shell"))
+	logger.Info("headless_shell search results", "matches", len(hs))
+
+	if len(hs) > 0 {
+		sort.Strings(hs)
+		p := hs[len(hs)-1]
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			logger.Info("found headless_shell executable", "path", p)
+			return p
+		} else {
+			logger.Warn("headless_shell file exists but stat failed", "path", p, "error", err)
+		}
+	}
+
+	logger.Error("no chromium executable found", "searched_paths", []string{
+		filepath.Join(base, "chromium-*", "chrome-linux", "chrome"),
+		filepath.Join(base, "chromium_headless_shell-*", "chrome-linux", "headless_shell"),
+	})
+	return ""
 }
 
 func (b *Browser) NewPage() (playwright.Page, error) {
@@ -200,18 +238,18 @@ func (b *Browser) Close() error {
 
 func (b *Browser) NavigateWithRetry(page playwright.Page, url string, maxRetries int) error {
 	var lastErr error
-	
+
 	for i := 0; i < maxRetries; i++ {
 		if i > 0 {
 			b.logger.Info("retrying navigation", "attempt", i+1, "url", url)
 			time.Sleep(time.Duration(i+1) * time.Second)
 		}
-		
+
 		_, err := page.Goto(url, playwright.PageGotoOptions{
 			WaitUntil: playwright.WaitUntilStateDomcontentloaded,
 			Timeout:   playwright.Float(30000),
 		})
-		
+
 		if err == nil {
 			// Check for bot protection after successful navigation
 			protected, err := b.CheckAndBypassBotProtection(page)
@@ -225,11 +263,11 @@ func (b *Browser) NavigateWithRetry(page playwright.Page, url string, maxRetries
 			}
 			return nil
 		}
-		
+
 		lastErr = err
 		b.logger.Error("navigation failed", "error", err, "attempt", i+1)
 	}
-	
+
 	return fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
 }
 
@@ -237,26 +275,26 @@ func (b *Browser) NavigateWithRetry(page playwright.Page, url string, maxRetries
 func (b *Browser) CheckAndBypassBotProtection(page playwright.Page) (bool, error) {
 	// Wait a bit for page to fully load
 	time.Sleep(2 * time.Second)
-	
+
 	// Check page title for bot check indicators
 	title, err := page.Title()
 	if err != nil {
 		return false, fmt.Errorf("failed to get page title: %w", err)
 	}
-	
+
 	b.logger.Debug("checking page", "title", title)
-	
+
 	// Check page content for bot protection
 	content, err := page.Content()
 	if err != nil {
 		return false, fmt.Errorf("failed to get page content: %w", err)
 	}
-	
+
 	// Look for German bot check indicators
 	if strings.Contains(content, "Klicke auf die Schaltfläche unten") ||
-	   strings.Contains(content, "Weiter shoppen") {
+		strings.Contains(content, "Weiter shoppen") {
 		b.logger.Info("bot protection detected, attempting bypass")
-		
+
 		// Try different button selectors
 		buttonSelectors := []string{
 			`button:has-text("Weiter shoppen")`,
@@ -264,44 +302,44 @@ func (b *Browser) CheckAndBypassBotProtection(page playwright.Page) (bool, error
 			`.a-button-primary`,
 			`button.a-button-text`,
 		}
-		
+
 		for _, selector := range buttonSelectors {
 			button := page.Locator(selector).First()
-			
+
 			// Check if button exists
 			count, err := button.Count()
 			if err != nil || count == 0 {
 				continue
 			}
-			
+
 			b.logger.Info("found bot check button", "selector", selector)
-			
+
 			// Click the button
 			if err := button.Click(); err != nil {
 				b.logger.Error("failed to click button", "error", err)
 				continue
 			}
-			
+
 			// Wait for navigation
 			time.Sleep(3 * time.Second)
-			
+
 			// Verify we're past the check
 			newContent, _ := page.Content()
-			
+
 			if !strings.Contains(newContent, "Klicke auf die Schaltfläche unten") {
 				b.logger.Info("successfully bypassed bot protection")
 				return true, nil
 			}
 		}
-		
+
 		return false, fmt.Errorf("could not find button to bypass bot protection")
 	}
-	
+
 	// Check for "Tut uns Leid" error page
 	if strings.Contains(title, "Tut uns Leid") || strings.Contains(content, "Tut uns Leid") {
 		return false, fmt.Errorf("Amazon error page detected")
 	}
-	
+
 	return false, nil
 }
 
@@ -314,10 +352,10 @@ func (b *Browser) HumanizeInteraction(page playwright.Page) error {
 		page.Mouse().Move(x, y)
 		time.Sleep(time.Millisecond * time.Duration(200+i*100))
 	}
-	
+
 	// Random scroll
 	page.Evaluate(`window.scrollBy(0, Math.random() * 300)`)
 	time.Sleep(time.Second)
-	
+
 	return nil
 }
