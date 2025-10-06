@@ -5,11 +5,7 @@ services:
   size-scraper:
     build:
       context: .
-      dockerfile: Dockerfile.scraper
-      target: runtime-size-scraper
-      args:
-        - BUILDKIT_INLINE_CACHE=1
-        - INSTALL_PLAYWRIGHT=true
+      dockerfile: Dockerfile.scraper.multistage
     container_name: amazon-scraper
     environment:
       # Database
@@ -86,9 +82,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.scraper
-      target: runtime-lifecycle
       args:
-        - INSTALL_PLAYWRIGHT=false
+        - BINARY=lifecycle-consumer
     container_name: amazon-scraper-consumer
     entrypoint: ["/app/lifecycle-consumer"]
     environment:
@@ -124,9 +119,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.scraper
-      target: runtime-redis
       args:
-        - INSTALL_PLAYWRIGHT=false
+        - BINARY=redis-job-consumer
     container_name: amazon-scraper-redis-consumer
     entrypoint: ["/app/redis-job-consumer"]
     environment:
@@ -157,10 +151,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.scraper
-      target: runtime-job-scraper
       args:
-        - INSTALL_PLAYWRIGHT=false
+        - BINARY=job-scraper
     container_name: amazon-job-scraper
+    entrypoint: ["/app/job-scraper"]
     environment:
       # Select service type for entrypoint
       SERVICE_TYPE: job-scraper

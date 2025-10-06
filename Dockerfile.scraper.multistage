@@ -10,21 +10,19 @@ WORKDIR /app
 ENV GOTOOLCHAIN=auto
 
 
-# Bring in local modules for replace directives (monorepo)
-COPY event-contracts /event-contracts
 # Using external tall-affiliate-common repository - no local copy needed
 
-# Copy go mod files from the amzon-size-scraper module
-COPY amzon-size-scraper/go.mod amzon-size-scraper/go.sum ./
+# Copy go mod files from the current module
+COPY go.mod go.sum ./
 
 # Download dependencies
 RUN go mod download
 
-# Copy source code of the amzon-size-scraper module
-COPY amzon-size-scraper/ .
+# Copy source code of the current module
+COPY . .
 
-# Build the application in builder stage
-RUN CGO_ENABLED=0 GOOS=linux go build -o amazon-scraper ./cmd/amazon-scraper
+# Build the application in builder stage (size-scraper binary)
+RUN CGO_ENABLED=0 GOOS=linux go build -o size-scraper ./cmd/size-scraper
 # Separate stage to install Playwright-Go driver on Debian (glibc)
 FROM golang:1.24 as driver-installer
 ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
@@ -48,7 +46,7 @@ COPY --from=driver-installer /root/.cache/ms-playwright /root/.cache/ms-playwrig
 COPY --from=driver-installer /root/.cache/ms-playwright-go /root/.cache/ms-playwright-go
 
 # Copy the binary from builder
-COPY --from=builder /app/amazon-scraper .
+COPY --from=builder /app/size-scraper .
 
 # Copy any necessary config files
 COPY --from=builder /app/configs ./configs
@@ -57,4 +55,4 @@ COPY --from=builder /app/configs ./configs
 EXPOSE 8084
 
 # Run the application
-CMD ["./amazon-scraper"]
+CMD ["./size-scraper"]

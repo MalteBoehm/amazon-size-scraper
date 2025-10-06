@@ -1,93 +1,21 @@
-###############
-# Builder base #
-###############
-FROM golang:1.25.0-trixie AS builder-base
+FROM golang:1.25-alpine AS builder
 WORKDIR /src
-ENV CGO_ENABLED=0
-ENV GOOS=linux
-ENV GOFLAGS=-mod=vendor
+ENV CGO_ENABLED=0 GOOS=linux
+RUN apk add --no-cache git ca-certificates tzdata
 
 COPY go.mod go.sum ./
-RUN apt-get update && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
-
+RUN go mod download
 COPY . .
 
-############################
-# Per-binary build targets #
-############################
-FROM builder-base AS build-size-scraper
-RUN go build -a -installsuffix cgo -o /out/size-scraper ./cmd/size-scraper
+# Build-time argument to select which binary to build
+ARG BINARY
+RUN test -n "$BINARY" || (echo "BINARY build-arg is required (e.g., lifecycle-consumer)" && exit 1)
+RUN go build -o /out/$BINARY ./cmd/$BINARY
 
-FROM builder-base AS build-lifecycle-consumer
-RUN go build -a -installsuffix cgo -o /out/lifecycle-consumer ./cmd/lifecycle-consumer
-
-FROM builder-base AS build-redis-job-consumer
-RUN go build -a -installsuffix cgo -o /out/redis-job-consumer ./cmd/redis-job-consumer
-
-FROM builder-base AS build-job-scraper
-RUN go build -a -installsuffix cgo -o /out/job-scraper ./cmd/job-scraper
-
-########################
-# Playwright driver DL #
-########################
-FROM builder-base AS driver-installer
-ARG INSTALL_PLAYWRIGHT=true
-RUN mkdir -p /root/.cache/ms-playwright-go/1.52.0 && \
-    if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
-      go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5200.0 install chromium || true; \
-    fi
-
-################
-# Runtime base #
-################
-FROM mcr.microsoft.com/playwright:v1.52.0-jammy AS runtime-base
+FROM alpine:3.19
 WORKDIR /app
-USER root
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=Etc/UTC
+RUN apk add --no-cache ca-certificates tzdata
+COPY --from=builder /out/* /app/
 
-COPY entrypoint.sh /app/entrypoint.sh
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata netcat-openbsd wget \
-    && ln -fs /usr/share/zoneinfo/$TZ /etc/localtime \
-    && dpkg-reconfigure -f noninteractive tzdata \
-    && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p logs/html proxy_data \
-    && chmod +x /app/entrypoint.sh
-
-#########################
-# Runtime: size-scraper #
-#########################
-FROM runtime-base AS runtime-size-scraper
-COPY --from=build-size-scraper /out/size-scraper /app/size-scraper
-COPY --from=driver-installer /root/.cache/ms-playwright-go /root/.cache/ms-playwright-go
-RUN ln -sf /app/size-scraper /app/amazon-scraper \
-    && mkdir -p /root/.cache \
-    && ln -snf /ms-playwright /root/.cache/ms-playwright
-EXPOSE 8084
-ENTRYPOINT ["/app/entrypoint.sh"]
-ENV PLAYWRIGHT_NODEJS_PATH=/usr/bin/node
-ENV PLAYWRIGHT_DRIVER_PATH=/root/.cache/ms-playwright-go/1.52.0
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-
-############################
-# Runtime: lifecycle-cons. #
-############################
-FROM runtime-base AS runtime-lifecycle
-COPY --from=build-lifecycle-consumer /out/lifecycle-consumer /app/lifecycle-consumer
-ENTRYPOINT ["/app/lifecycle-consumer"]
-
-############################
-# Runtime: redis-job-cons. #
-############################
-FROM runtime-base AS runtime-redis
-COPY --from=build-redis-job-consumer /out/redis-job-consumer /app/redis-job-consumer
-ENTRYPOINT ["/app/redis-job-consumer"]
-
-###########################
-# Runtime: job-scraper    #
-###########################
-FROM runtime-base AS runtime-job-scraper
-COPY --from=build-job-scraper /out/job-scraper /app/job-scraper
-ENTRYPOINT ["/app/job-scraper"]
+# No default entrypoint; docker-compose should set it to /app/<binary>
+CMD ["sh", "-c", "/bin/echo 'Set entrypoint in docker-compose to /app/<binary>' && sleep 5"]
