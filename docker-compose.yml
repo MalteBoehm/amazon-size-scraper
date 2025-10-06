@@ -150,7 +150,7 @@ services:
   job-scraper:
     build:
       context: .
-      dockerfile: Dockerfile.scraper
+      dockerfile: Dockerfile.scraper.multistage
       args:
         - BINARY=job-scraper
     container_name: amazon-job-scraper

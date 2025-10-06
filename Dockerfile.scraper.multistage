@@ -32,7 +32,9 @@ RUN go mod download
 
 # Copy source and build
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/size-scraper ./cmd/size-scraper
+# Build the binary specified by BINARY arg (default: size-scraper)
+ARG BINARY=size-scraper
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/${BINARY} ./cmd/${BINARY}
 
 # Install Playwright-Go driver and ensure Chromium is available
 RUN echo "Installing Playwright browsers..." && \
@@ -54,4 +56,6 @@ RUN echo "Manual Playwright browser installation..." && \
 RUN chmod -R 755 /ms-playwright || echo "Permission setting failed"
 
 EXPOSE 8084
-CMD ["/app/size-scraper"]
+# Use the binary specified by BINARY arg
+ARG BINARY=size-scraper
+CMD ["/app/${BINARY}"]
