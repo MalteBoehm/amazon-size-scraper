@@ -319,6 +319,10 @@ func (c *JobConsumer) processMessage(ctx context.Context, msg redis.XMessage) er
     if inner, ok := payload["data"].(map[string]interface{}); ok {
         payload = inner
     }
+    // Some producers envelope under { payload: {...} } (event wrapper)
+    if inner, ok := payload["payload"].(map[string]interface{}); ok {
+        payload = inner
+    }
 
     // Extract job details (support snake_case and camelCase)
     jobID, _ := payload["job_id"].(string)

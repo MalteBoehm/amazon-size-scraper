@@ -111,6 +111,8 @@ if [ "$SERVICE_NAME" = "lifecycle-consumer" ]; then
     BINARY="./lifecycle-consumer"
 elif [ "$SERVICE_NAME" = "redis-job-consumer" ]; then
     BINARY="./redis-job-consumer"
+elif [ "$SERVICE_NAME" = "job-scraper" ]; then
+    BINARY="./job-scraper"
 elif [ -f "./amazon-scraper" ]; then
     BINARY="./amazon-scraper"
 fi

@@ -134,13 +134,35 @@ services:
       REDIS_ADDR: ${REDIS_ADDR:-49.13.49.90:3020}
       REDIS_HOST: ${REDIS_HOST:-49.13.49.90}
       REDIS_PORT: ${REDIS_PORT:-3020}
-      REDIS_USERNAME: ${REDIS_USERNAME:-default}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-pass}
 
       # Logging
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_FORMAT: ${LOG_FORMAT:-json}
 
+    networks:
+      - kopers-network
+    restart: unless-stopped
+
+  # Job Scraper worker: polls scraper_jobs table and processes search jobs
+  job-scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile.scraper
+    container_name: amazon-job-scraper
+    environment:
+      # Select service type for entrypoint
+      SERVICE_TYPE: job-scraper
+      # Database
+      DB_HOST: ${DB_HOST:-49.13.49.90}
+      DB_PORT: ${DB_PORT:-5111}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-m5DAUj3AC1VGdLf0bamLSYesXKlYraZgq4e21qHp4NLIrO4t1mLfHI44WkEr0OQL}
+      DB_NAME: ${DB_NAME:-amazon_scraper}
+      DB_SSL_MODE: ${DB_SSL_MODE:-disable}
+      # Browser (optional overrides)
+      BROWSER_HEADLESS: ${BROWSER_HEADLESS:-true}
+      BROWSER_TIMEOUT: ${BROWSER_TIMEOUT:-30s}
     networks:
       - kopers-network
     restart: unless-stopped

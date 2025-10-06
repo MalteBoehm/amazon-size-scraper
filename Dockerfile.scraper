@@ -18,6 +18,7 @@ RUN set -eux; \
     CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o size-scraper ./cmd/size-scraper; \
     CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o lifecycle-consumer ./cmd/lifecycle-consumer; \
     CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o redis-job-consumer ./cmd/redis-job-consumer; \
+    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o job-scraper ./cmd/job-scraper; \
     go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5200.0 install chromium
 
 # Use official Playwright Ubuntu (glibc) runtime image to avoid Alpine/musl issues
@@ -36,6 +37,7 @@ ENV TZ=Etc/UTC
 COPY --from=builder /app/size-scraper .
 COPY --from=builder /app/lifecycle-consumer .
 COPY --from=builder /app/redis-job-consumer .
+COPY --from=builder /app/job-scraper .
 
 # Copy Playwright driver (ms-playwright-go) required at runtime for playwright-go
 COPY --from=builder /root/.cache/ms-playwright-go /root/.cache/ms-playwright-go
