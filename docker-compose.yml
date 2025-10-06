@@ -6,6 +6,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.scraper
+      target: runtime-size-scraper
       args:
         - BUILDKIT_INLINE_CACHE=1
         - INSTALL_PLAYWRIGHT=true
@@ -85,6 +86,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.scraper
+      target: runtime-lifecycle
       args:
         - INSTALL_PLAYWRIGHT=false
     container_name: amazon-scraper-consumer
@@ -122,6 +124,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.scraper
+      target: runtime-redis
       args:
         - INSTALL_PLAYWRIGHT=false
     container_name: amazon-scraper-redis-consumer
@@ -154,6 +157,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.scraper
+      target: runtime-job-scraper
       args:
         - INSTALL_PLAYWRIGHT=false
     container_name: amazon-job-scraper

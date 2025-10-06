@@ -1,78 +1,93 @@
-# Multi-stage build for Amazon scraper
-FROM golang:1.25.0-trixie AS builder
+###############
+# Builder base #
+###############
+FROM golang:1.25.0-trixie AS builder-base
+WORKDIR /src
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GOFLAGS=-mod=vendor
 
-# Allow services to opt-in to Playwright driver install during build
-ARG INSTALL_PLAYWRIGHT=true
-
-WORKDIR /app
-
-# Copy go.mod and go.sum first for better caching, then download deps in a single layer
 COPY go.mod go.sum ./
 RUN apt-get update && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/* \
-    && go mod download
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy source code
 COPY . .
 
-# Build all binaries and install Playwright in a single layer to minimize RUN invocations
-# Use the historical main path for size-scraper to match previous deployments
-RUN set -eux; \
-    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o size-scraper ./cmd/size-scraper; \
-    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o lifecycle-consumer ./cmd/lifecycle-consumer; \
-    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o redis-job-consumer ./cmd/redis-job-consumer; \
-    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o job-scraper ./cmd/job-scraper; \
-    mkdir -p /root/.cache/ms-playwright-go/1.52.0; \
+############################
+# Per-binary build targets #
+############################
+FROM builder-base AS build-size-scraper
+RUN go build -a -installsuffix cgo -o /out/size-scraper ./cmd/size-scraper
+
+FROM builder-base AS build-lifecycle-consumer
+RUN go build -a -installsuffix cgo -o /out/lifecycle-consumer ./cmd/lifecycle-consumer
+
+FROM builder-base AS build-redis-job-consumer
+RUN go build -a -installsuffix cgo -o /out/redis-job-consumer ./cmd/redis-job-consumer
+
+FROM builder-base AS build-job-scraper
+RUN go build -a -installsuffix cgo -o /out/job-scraper ./cmd/job-scraper
+
+########################
+# Playwright driver DL #
+########################
+FROM builder-base AS driver-installer
+ARG INSTALL_PLAYWRIGHT=true
+RUN mkdir -p /root/.cache/ms-playwright-go/1.52.0 && \
     if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
       go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5200.0 install chromium || true; \
     fi
 
-# Use official Playwright Ubuntu (glibc) runtime image to avoid Alpine/musl issues
-FROM mcr.microsoft.com/playwright:v1.52.0-jammy
-
+################
+# Runtime base #
+################
+FROM mcr.microsoft.com/playwright:v1.52.0-jammy AS runtime-base
 WORKDIR /app
-
-# Ensure we have privileges to install packages and manage caches
 USER root
-
-# Avoid interactive prompts during apt installs
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 
-# Copy all binaries from the builder stage
-COPY --from=builder /app/size-scraper .
-COPY --from=builder /app/lifecycle-consumer .
-COPY --from=builder /app/redis-job-consumer .
-COPY --from=builder /app/job-scraper .
-
-# Copy Playwright driver (ms-playwright-go) required at runtime for playwright-go
-COPY --from=builder /root/.cache/ms-playwright-go /root/.cache/ms-playwright-go
-
-# Copy entrypoint script early so we can set perms in the combined RUN below
-COPY entrypoint.sh .
-
-# Install runtime deps, prepare filesystem, set permissions and legacy symlink in a single layer
-# netcat-openbsd provides reliable `nc -z` for health waits in entrypoint
+COPY entrypoint.sh /app/entrypoint.sh
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata netcat-openbsd wget \
     && ln -fs /usr/share/zoneinfo/$TZ /etc/localtime \
     && dpkg-reconfigure -f noninteractive tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p logs/html proxy_data \
-    && chmod +x entrypoint.sh \
-    && ln -sf /app/size-scraper /app/amazon-scraper \
+    && chmod +x /app/entrypoint.sh
+
+#########################
+# Runtime: size-scraper #
+#########################
+FROM runtime-base AS runtime-size-scraper
+COPY --from=build-size-scraper /out/size-scraper /app/size-scraper
+COPY --from=driver-installer /root/.cache/ms-playwright-go /root/.cache/ms-playwright-go
+RUN ln -sf /app/size-scraper /app/amazon-scraper \
     && mkdir -p /root/.cache \
     && ln -snf /ms-playwright /root/.cache/ms-playwright
-
-## Note: Do not bake proxy_list into /app/proxy_data/proxy_list to avoid dir↔file mount conflicts with Coolify
-
-# Expose port
 EXPOSE 8084
-
-# Set entrypoint
-ENTRYPOINT ["./entrypoint.sh"]
-
-# Ensure playwright-go uses Node from the image, the preinstalled browsers, and driver cache
+ENTRYPOINT ["/app/entrypoint.sh"]
 ENV PLAYWRIGHT_NODEJS_PATH=/usr/bin/node
 ENV PLAYWRIGHT_DRIVER_PATH=/root/.cache/ms-playwright-go/1.52.0
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+############################
+# Runtime: lifecycle-cons. #
+############################
+FROM runtime-base AS runtime-lifecycle
+COPY --from=build-lifecycle-consumer /out/lifecycle-consumer /app/lifecycle-consumer
+ENTRYPOINT ["/app/lifecycle-consumer"]
+
+############################
+# Runtime: redis-job-cons. #
+############################
+FROM runtime-base AS runtime-redis
+COPY --from=build-redis-job-consumer /out/redis-job-consumer /app/redis-job-consumer
+ENTRYPOINT ["/app/redis-job-consumer"]
+
+###########################
+# Runtime: job-scraper    #
+###########################
+FROM runtime-base AS runtime-job-scraper
+COPY --from=build-job-scraper /out/job-scraper /app/job-scraper
+ENTRYPOINT ["/app/job-scraper"]
