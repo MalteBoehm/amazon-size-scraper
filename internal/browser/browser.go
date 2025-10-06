@@ -1,12 +1,15 @@
 package browser
 
 import (
-	"fmt"
-	"log/slog"
-	"strings"
-	"time"
+    "fmt"
+    "log/slog"
+    "os"
+    "path/filepath"
+    "sort"
+    "strings"
+    "time"
 
-	"github.com/playwright-community/playwright-go"
+    "github.com/playwright-community/playwright-go"
 )
 
 type Browser struct {
@@ -72,6 +75,11 @@ func New(opts *Options) (*Browser, error) {
 		},
 	}
 
+    // Prefer the full Chromium binary from Playwright image to avoid headless_shell ENOENT
+    if execPath := findChromiumExecutable(); execPath != "" {
+        launchOpts.ExecutablePath = &execPath
+    }
+
 	if opts.ProxyServer != "" {
 		proxy := &playwright.Proxy{
 			Server: opts.ProxyServer,
@@ -118,6 +126,33 @@ func New(opts *Options) (*Browser, error) {
 		context: context,
 		logger:  slog.Default().With("component", "browser"),
 	}, nil
+}
+
+// findChromiumExecutable returns the best available Chromium binary path.
+func findChromiumExecutable() string {
+    base := os.Getenv("PLAYWRIGHT_BROWSERS_PATH")
+    if base == "" {
+        base = "/ms-playwright"
+    }
+    // Prefer full chromium over headless shell
+    matches, _ := filepath.Glob(filepath.Join(base, "chromium-*", "chrome-linux", "chrome"))
+    if len(matches) > 0 {
+        sort.Strings(matches)
+        p := matches[len(matches)-1]
+        if st, err := os.Stat(p); err == nil && !st.IsDir() {
+            return p
+        }
+    }
+    // Fallback to headless_shell if present
+    hs, _ := filepath.Glob(filepath.Join(base, "chromium_headless_shell-*", "chrome-linux", "headless_shell"))
+    if len(hs) > 0 {
+        sort.Strings(hs)
+        p := hs[len(hs)-1]
+        if st, err := os.Stat(p); err == nil && !st.IsDir() {
+            return p
+        }
+    }
+    return ""
 }
 
 func (b *Browser) NewPage() (playwright.Page, error) {

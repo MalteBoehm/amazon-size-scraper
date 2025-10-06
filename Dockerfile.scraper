@@ -48,8 +48,7 @@ RUN apt-get update \
     && chmod +x entrypoint.sh \
     && ln -sf /app/size-scraper /app/amazon-scraper \
     && mkdir -p /root/.cache \
-    && ln -snf /ms-playwright /root/.cache/ms-playwright \
-    && node /root/.cache/ms-playwright-go/1.52.0/package/cli.js install --only-shell chromium
+    && ln -snf /ms-playwright /root/.cache/ms-playwright
 
 ## Note: Do not bake proxy_list into /app/proxy_data/proxy_list to avoid dir↔file mount conflicts with Coolify
 
