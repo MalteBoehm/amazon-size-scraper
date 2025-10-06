@@ -58,4 +58,4 @@ RUN chmod -R 755 /ms-playwright || echo "Permission setting failed"
 EXPOSE 8084
 # Use the binary specified by BINARY arg
 ARG BINARY=size-scraper
-CMD ["/app/${BINARY}"]
+CMD ["sh", "-c", "exec /app/$(basename ${BINARY:-size-scraper})"]

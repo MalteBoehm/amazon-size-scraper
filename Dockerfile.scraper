@@ -17,5 +17,5 @@ WORKDIR /app
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=builder /out/* /app/
 
-# No default entrypoint; docker-compose should set it to /app/<binary>
-CMD ["sh", "-c", "/bin/echo 'Set entrypoint in docker-compose to /app/<binary>' && sleep 5"]
+# Use the binary name as the default command
+CMD ["sh", "-c", "exec /app/$(basename ${BINARY:-lifecycle-consumer})"]
