@@ -28,6 +28,10 @@ WORKDIR /app
 # Ensure we have privileges to install packages and manage caches
 USER root
 
+# Avoid interactive prompts during apt installs
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+
 # Copy all binaries from the builder stage
 COPY --from=builder /app/size-scraper .
 COPY --from=builder /app/lifecycle-consumer .
@@ -43,6 +47,8 @@ COPY entrypoint.sh .
 # netcat-openbsd provides reliable `nc -z` for health waits in entrypoint
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata netcat-openbsd wget \
+    && ln -fs /usr/share/zoneinfo/$TZ /etc/localtime \
+    && dpkg-reconfigure -f noninteractive tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p logs/html proxy_data \
     && chmod +x entrypoint.sh \
