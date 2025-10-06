@@ -96,31 +96,27 @@ func (ps *ProductScraper) ScrapeProduct(ctx context.Context, asin string) error 
 	// Add human-like behavior
 	ps.browser.HumanizeInteraction(page)
 
-	// Extract material composition in debug mode (before clicking size table button)
+	// Extract material composition (always active, not just in debug mode)
 	var materialInfo *models.MaterialInfo
-	// Check both config and environment variable for debug mode
-	debugMode := ps.config.Logging.DebugMode || os.Getenv("DEBUG_MODE") == "true"
-	if debugMode {
-		ps.logger.Debug("extracting material composition", "asin", asin)
-		// Get page content for material extraction
-		html, err := page.Content()
+	ps.logger.Debug("extracting material composition", "asin", asin)
+	// Get page content for material extraction
+	html, err := page.Content()
+	if err == nil {
+		// Parse product page for material information
+		productParser := parser.NewAmazonParser()
+		parsedProduct, err := productParser.ParseProductPage(html, asin)
 		if err == nil {
-			// Parse product page for material information
-			productParser := parser.NewAmazonParser()
-			parsedProduct, err := productParser.ParseProductPage(html, asin)
-			if err == nil {
-				materialInfo = parsedProduct.MaterialInfo
-				if materialInfo != nil && len(materialInfo.Materials) > 0 {
-					ps.logger.Info("material composition extracted", "asin", asin, "materials", len(materialInfo.Materials), "source", materialInfo.Source)
-				} else {
-					ps.logger.Debug("no material composition found", "asin", asin)
-				}
+			materialInfo = parsedProduct.MaterialInfo
+			if materialInfo != nil && len(materialInfo.Materials) > 0 {
+				ps.logger.Info("material composition extracted", "asin", asin, "materials", len(materialInfo.Materials), "source", materialInfo.Source)
 			} else {
-				ps.logger.Error("failed to parse product for material extraction", "asin", asin, "error", err)
+				ps.logger.Debug("no material composition found", "asin", asin)
 			}
 		} else {
-			ps.logger.Error("failed to get page content for material extraction", "asin", asin, "error", err)
+			ps.logger.Error("failed to parse product for material extraction", "asin", asin, "error", err)
 		}
+	} else {
+		ps.logger.Error("failed to get page content for material extraction", "asin", asin, "error", err)
 	}
 
 	// Look for size table button
@@ -174,7 +170,8 @@ func (ps *ProductScraper) ScrapeProduct(ctx context.Context, asin string) error 
 	// Material composition already extracted above before size table button click
 
 	// Update product in database or log to console in debug mode
-	if ps.config.Logging.DebugMode {
+	debugMode := ps.config.Logging.DebugMode || os.Getenv("DEBUG_MODE") == "true"
+	if debugMode {
 		title := "Unknown Product"
 		if product != nil {
 			title = product.Title
@@ -553,7 +550,8 @@ func (ps *ProductScraper) parseValue(text string) float64 {
 
 // updateProductError updates the product status with an error
 func (ps *ProductScraper) updateProductError(ctx context.Context, asin, errorMsg string) {
-	if ps.config.Logging.DebugMode {
+	debugMode := ps.config.Logging.DebugMode || os.Getenv("DEBUG_MODE") == "true"
+	if debugMode {
 		ps.logger.Error("product error in debug mode", "asin", asin, "error", errorMsg)
 	} else {
 		if err := ps.db.UpdateProductStatus(ctx, asin, database.StatusFailed, errorMsg); err != nil {
