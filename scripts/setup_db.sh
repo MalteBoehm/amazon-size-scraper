@@ -2,7 +2,7 @@
 
 # Database setup script for Amazon Size Scraper
 
-DB_NAME="${DB_NAME:-amazon_scraper}"
+DB_NAME="${DB_NAME:-tall-affiliate}"
 DB_USER="${DB_USER:-postgres}"
 DB_HOST="${DB_HOST:-localhost}"
 DB_PORT="${DB_PORT:-5432}"

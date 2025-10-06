@@ -168,6 +168,8 @@ services:
       # Browser (optional overrides)
       BROWSER_HEADLESS: ${BROWSER_HEADLESS:-true}
       BROWSER_TIMEOUT: ${BROWSER_TIMEOUT:-30s}
+      # Playwright
+      PLAYWRIGHT_BROWSERS_PATH: ${PLAYWRIGHT_BROWSERS_PATH:-/ms-playwright}
     networks:
       - kopers-network
     restart: unless-stopped

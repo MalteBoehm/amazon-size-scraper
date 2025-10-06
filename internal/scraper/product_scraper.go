@@ -628,7 +628,7 @@ func (ps *ProductScraper) ScrapeAllPending(ctx context.Context, limit int) error
 
 		// Check if there are any products at all using a simple query
 		var totalCount int
-		row := ps.db.QueryRow(ctx, "SELECT COUNT(*) FROM products")
+		row := ps.db.QueryRow(ctx, "SELECT COUNT(*) FROM product")
 		err = row.Scan(&totalCount)
 		if err != nil {
 			ps.logger.Error("failed to get total product count", "error", err)
