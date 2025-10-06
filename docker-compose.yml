@@ -8,6 +8,7 @@ services:
       dockerfile: Dockerfile.scraper
       args:
         - BUILDKIT_INLINE_CACHE=1
+        - INSTALL_PLAYWRIGHT=true
     container_name: amazon-scraper
     environment:
       # Database
@@ -84,6 +85,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.scraper
+      args:
+        - INSTALL_PLAYWRIGHT=false
     container_name: amazon-scraper-consumer
     entrypoint: ["/app/lifecycle-consumer"]
     environment:
@@ -119,6 +122,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.scraper
+      args:
+        - INSTALL_PLAYWRIGHT=false
     container_name: amazon-scraper-redis-consumer
     entrypoint: ["/app/redis-job-consumer"]
     environment:
@@ -149,6 +154,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.scraper
+      args:
+        - INSTALL_PLAYWRIGHT=false
     container_name: amazon-job-scraper
     environment:
       # Select service type for entrypoint

@@ -1,6 +1,9 @@
 # Multi-stage build for Amazon scraper
 FROM golang:1.25.0-trixie AS builder
 
+# Allow services to opt-in to Playwright driver install during build
+ARG INSTALL_PLAYWRIGHT=true
+
 WORKDIR /app
 
 # Copy go.mod and go.sum first for better caching, then download deps in a single layer
@@ -19,7 +22,10 @@ RUN set -eux; \
     CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o lifecycle-consumer ./cmd/lifecycle-consumer; \
     CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o redis-job-consumer ./cmd/redis-job-consumer; \
     CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o job-scraper ./cmd/job-scraper; \
-    go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5200.0 install chromium
+    mkdir -p /root/.cache/ms-playwright-go/1.52.0; \
+    if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
+      go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5200.0 install chromium || true; \
+    fi
 
 # Use official Playwright Ubuntu (glibc) runtime image to avoid Alpine/musl issues
 FROM mcr.microsoft.com/playwright:v1.52.0-jammy
