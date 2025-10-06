@@ -1,5 +1,3 @@
-version: "3.8"
-
 # Docker Compose Override File for Development
 # This file automatically extends docker-compose.yml when running locally
 # Coolify and production deployments will ignore this file
@@ -42,42 +40,42 @@ services:
     tty: true
     stdin_open: true
 
-  # Override postgres for development
-  postgres:
-    # Additional port for external access
-    ports:
-      - "${DB_PORT:-5432}:5432"
-      # Alternative port to avoid conflicts
-      # - "5433:5432"
+  # Override postgres for development - COMMENTED OUT TO AVOID CONFLICTS
+  # postgres:
+  #   # Additional port for external access
+  #   ports:
+  #     - "${DB_PORT:-5432}:5432"
+  #     # Alternative port to avoid conflicts
+  #     # - "5433:5432"
+  #
+  #   # Development settings
+  #   environment:
+  #     POSTGRES_USER: ${DB_USER:-postgres}
+  #     POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+  #     POSTGRES_DB: ${DB_NAME:-amazon_scraper}
+  #
+  #   # Mount migrations for manual execution if needed
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #     - ./migrations:/docker-entrypoint-initdb.d:ro
+  #     # Uncomment for SQL access to migrations
+  #     # - ./migrations:/migrations:ro
 
-    # Development settings
-    environment:
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-      POSTGRES_DB: ${DB_NAME:-amazon_scraper}
-
-    # Mount migrations for manual execution if needed
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d:ro
-      # Uncomment for SQL access to migrations
-      # - ./migrations:/migrations:ro
-
-  # Override redis for development
-  redis:
-    # Additional port for external access
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-      # Alternative port to avoid conflicts
-      # - "6380:6379"
-
-    # Redis GUI development tools can connect here
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+  # Override redis for development - COMMENTED OUT TO AVOID CONFLICTS
+  # redis:
+  #   # Additional port for external access
+  #   ports:
+  #     - "${REDIS_PORT:-6379}:6379"
+  #     # Alternative port to avoid conflicts
+  #     # - "6380:6379"
+  #
+  #   # Redis GUI development tools can connect here
+  #   command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
 
 # Development volumes
 volumes:
-  postgres_data:
-    name: amazon-scraper-postgres-dev-data
+  # postgres_data:
+  #   name: amazon-scraper-postgres-dev-data
   redis_data:
     name: amazon-scraper-redis-dev-data
   scraper_logs:

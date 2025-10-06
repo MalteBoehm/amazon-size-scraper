@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-    "github.com/maltedev/amazon-size-scraper/internal/database"
+	"github.com/maltedev/amazon-size-scraper/internal/database"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -159,7 +159,9 @@ func getEnv(key, defaultValue string) string {
 }
 
 func (c *JobConsumer) Run(ctx context.Context) error {
-	streamKey := "stream:scraper_jobs"    // This is where SCRAPER_JOB_REQUESTED events are stored
+	streamKey := "stream:scraper_jobs" // This is where SCRAPER_JOB_REQUESTED events are stored
+	// TODO: Add StreamScraperJobs constant to tall-affiliate-common and use it here
+	// streamKey := constants.StreamScraperJobs
 	consumerGroup := "group:scraper_jobs" // Create appropriate consumer group for scraper jobs
 	consumerName := "redis-job-consumer-1"
 
@@ -277,94 +279,104 @@ func (c *JobConsumer) processMessage(ctx context.Context, msg redis.XMessage) er
 
 	c.logger.Info("Processing valid job event", "event_type", actualEventType, "message_id", msg.ID)
 
-    // Get payload - accept string, []byte, or map under "payload" or "data"
-    var payload map[string]interface{}
-    if raw, ok := msg.Values["payload"]; ok {
-        switch v := raw.(type) {
-        case string:
-            if err := json.Unmarshal([]byte(v), &payload); err != nil {
-                return fmt.Errorf("failed to parse payload: %w", err)
-            }
-        case []byte:
-            if err := json.Unmarshal(v, &payload); err != nil {
-                return fmt.Errorf("failed to parse payload: %w", err)
-            }
-        case map[string]interface{}:
-            payload = v
-        default:
-            // Unsupported type; continue to try data field
-        }
-    }
-    if payload == nil {
-        if raw, ok := msg.Values["data"]; ok {
-            switch v := raw.(type) {
-            case string:
-                if err := json.Unmarshal([]byte(v), &payload); err != nil {
-                    return fmt.Errorf("failed to parse data: %w", err)
-                }
-            case []byte:
-                if err := json.Unmarshal(v, &payload); err != nil {
-                    return fmt.Errorf("failed to parse data: %w", err)
-                }
-            case map[string]interface{}:
-                payload = v
-            }
-        }
-    }
-    if payload == nil {
-        return fmt.Errorf("missing payload/data in event")
-    }
+	// Get payload - accept string, []byte, or map under "payload" or "data"
+	var payload map[string]interface{}
+	if raw, ok := msg.Values["payload"]; ok {
+		switch v := raw.(type) {
+		case string:
+			if err := json.Unmarshal([]byte(v), &payload); err != nil {
+				return fmt.Errorf("failed to parse payload: %w", err)
+			}
+		case []byte:
+			if err := json.Unmarshal(v, &payload); err != nil {
+				return fmt.Errorf("failed to parse payload: %w", err)
+			}
+		case map[string]interface{}:
+			payload = v
+		default:
+			// Unsupported type; continue to try data field
+		}
+	}
+	if payload == nil {
+		if raw, ok := msg.Values["data"]; ok {
+			switch v := raw.(type) {
+			case string:
+				if err := json.Unmarshal([]byte(v), &payload); err != nil {
+					return fmt.Errorf("failed to parse data: %w", err)
+				}
+			case []byte:
+				if err := json.Unmarshal(v, &payload); err != nil {
+					return fmt.Errorf("failed to parse data: %w", err)
+				}
+			case map[string]interface{}:
+				payload = v
+			}
+		}
+	}
+	if payload == nil {
+		return fmt.Errorf("missing payload/data in event")
+	}
 
-    // Some producers envelope under { data: {...} }
-    if inner, ok := payload["data"].(map[string]interface{}); ok {
-        payload = inner
-    }
-    // Some producers envelope under { payload: {...} } (event wrapper)
-    if inner, ok := payload["payload"].(map[string]interface{}); ok {
-        payload = inner
-    }
+	// Some producers envelope under { data: {...} }
+	if inner, ok := payload["data"].(map[string]interface{}); ok {
+		payload = inner
+	}
+	// Some producers envelope under { payload: {...} } (event wrapper)
+	if inner, ok := payload["payload"].(map[string]interface{}); ok {
+		payload = inner
+	}
 
-    // Extract job details (support snake_case and camelCase)
-    jobID, _ := payload["job_id"].(string)
-    if jobID == "" {
-        jobID, _ = payload["jobId"].(string)
-    }
-    searchQuery, _ := payload["search_query"].(string)
-    if searchQuery == "" {
-        if s, ok := payload["searchQuery"].(string); ok {
-            searchQuery = s
-        } else if s, ok := payload["query"].(string); ok {
-            searchQuery = s
-        }
-    }
-    category, _ := payload["category"].(string)
-    if category == "" {
-        if s, ok := payload["categoryName"].(string); ok {
-            category = s
-        }
-    }
-    var maxPages int
-    if v, ok := payload["max_pages"].(float64); ok {
-        maxPages = int(v)
-    } else if v, ok := payload["maxPages"].(float64); ok {
-        maxPages = int(v)
-    } else if v, ok := payload["max_pages"].(int); ok {
-        maxPages = v
-    }
+	// Extract job details (support snake_case and camelCase)
+	jobID, _ := payload["job_id"].(string)
+	if jobID == "" {
+		jobID, _ = payload["jobId"].(string)
+	}
+	searchQuery, _ := payload["search_query"].(string)
+	if searchQuery == "" {
+		if s, ok := payload["searchQuery"].(string); ok {
+			searchQuery = s
+		} else if s, ok := payload["query"].(string); ok {
+			searchQuery = s
+		}
+	}
+	category, _ := payload["category"].(string)
+	if category == "" {
+		if s, ok := payload["categoryName"].(string); ok {
+			category = s
+		}
+	}
+	var maxPages int
+	if v, ok := payload["max_pages"].(float64); ok {
+		maxPages = int(v)
+	} else if v, ok := payload["maxPages"].(float64); ok {
+		maxPages = int(v)
+	} else if v, ok := payload["max_pages"].(int); ok {
+		maxPages = v
+	}
 
-    // Final fallback: read fields directly from message if present
-    if jobID == "" {
-        if v, ok := msg.Values["job_id"].(string); ok { jobID = v }
-        if v, ok := msg.Values["jobId"].(string); ok { jobID = v }
-    }
-    if searchQuery == "" {
-        if v, ok := msg.Values["search_query"].(string); ok { searchQuery = v }
-        if v, ok := msg.Values["searchQuery"].(string); ok { searchQuery = v }
-        if v, ok := msg.Values["query"].(string); ok { searchQuery = v }
-    }
+	// Final fallback: read fields directly from message if present
+	if jobID == "" {
+		if v, ok := msg.Values["job_id"].(string); ok {
+			jobID = v
+		}
+		if v, ok := msg.Values["jobId"].(string); ok {
+			jobID = v
+		}
+	}
+	if searchQuery == "" {
+		if v, ok := msg.Values["search_query"].(string); ok {
+			searchQuery = v
+		}
+		if v, ok := msg.Values["searchQuery"].(string); ok {
+			searchQuery = v
+		}
+		if v, ok := msg.Values["query"].(string); ok {
+			searchQuery = v
+		}
+	}
 
 	if jobID == "" || searchQuery == "" {
-        return fmt.Errorf("missing required job fields: job_id or search_query")
+		return fmt.Errorf("missing required job fields: job_id or search_query")
 	}
 
 	c.logger.Info("Extracted job from payload",
