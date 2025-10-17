@@ -12,11 +12,14 @@ import (
 	"github.com/playwright-community/playwright-go"
 	"github.com/maltedev/amazon-size-scraper/internal/browser"
 	"github.com/maltedev/amazon-size-scraper/internal/database"
+	"github.com/maltedev/amazon-size-scraper/internal/models"
+	"github.com/maltedev/amazon-size-scraper/internal/parser"
 )
 
 type ProductScraper struct {
 	browser   *browser.Browser
 	db        *database.DB
+	parser    parser.Parser
 	logger    *slog.Logger
 	rateLimit time.Duration
 }
@@ -25,6 +28,7 @@ func NewProductScraper(b *browser.Browser, db *database.DB) *ProductScraper {
 	return &ProductScraper{
 		browser:   b,
 		db:        db,
+		parser:    parser.NewAmazonParser(),
 		logger:    slog.Default().With("component", "product_scraper"),
 		rateLimit: 5 * time.Second,
 	}
@@ -91,18 +95,54 @@ func (ps *ProductScraper) ScrapeProduct(ctx context.Context, asin string) error 
 		return nil
 	}
 	
-	// Update product in database
-	if err := ps.db.UpdateProductSizes(ctx, asin, sizeTable); err != nil {
-		return fmt.Errorf("failed to update product sizes: %w", err)
+	// Extract material information
+	materialComposition, materialFullText, err := ps.extractMaterial(page)
+	if err != nil {
+		ps.logger.Warn("failed to extract material", "asin", asin, "error", err)
+		// Continue without material data - not a fatal error
+		materialComposition = nil
+		materialFullText = ""
+	} else {
+		ps.logger.Info("extracted material", "asin", asin,
+			"hasComposition", materialComposition != nil,
+			"fullTextLength", len(materialFullText))
 	}
-	
-	ps.logger.Info("successfully scraped product", "asin", asin, 
-		"sizeCount", len(sizeTable.Sizes))
+
+	// Update product in database with both size and material data
+	if err := ps.db.UpdateProductWithMaterialAndSize(ctx, asin, sizeTable, materialComposition, materialFullText); err != nil {
+		return fmt.Errorf("failed to update product with material and size: %w", err)
+	}
+
+	ps.logger.Info("successfully scraped product", "asin", asin,
+		"sizeCount", len(sizeTable.Sizes),
+		"hasMaterial", materialComposition != nil)
 	
 	// Rate limiting
 	time.Sleep(ps.rateLimit)
-	
+
 	return nil
+}
+
+// extractMaterial extracts material information from the product page
+func (ps *ProductScraper) extractMaterial(page playwright.Page) (*models.MaterialComposition, string, error) {
+	// Get page content
+	html, err := page.Content()
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to get page content: %w", err)
+	}
+
+	// Use parser to extract material composition
+	amazonParser, ok := ps.parser.(*parser.AmazonParser)
+	if !ok {
+		return nil, "", fmt.Errorf("parser is not AmazonParser")
+	}
+
+	materialComposition, materialFullText, err := amazonParser.ExtractMaterialComposition(html)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to extract material composition: %w", err)
+	}
+
+	return materialComposition, materialFullText, nil
 }
 
 // extractSizeTable finds and extracts the size table from the product page

@@ -5,19 +5,32 @@ import (
 )
 
 type Product struct {
-	ID          string    `json:"id"`
-	ASIN        string    `json:"asin"`
-	URL         string    `json:"url"`
-	Title       string    `json:"title"`
-	Brand       string    `json:"brand"`
-	Category    string    `json:"category"`
-	Material    string    `json:"material"`
-	Dimensions  Dimension `json:"dimensions"`
-	Weight      Weight    `json:"weight"`
-	Price       Price     `json:"price"`
-	Images      []string  `json:"images"`
-	ScrapedAt   time.Time `json:"scraped_at"`
-	LastUpdated time.Time `json:"last_updated"`
+	ID          string              `json:"id"`
+	ASIN        string              `json:"asin"`
+	URL         string              `json:"url"`
+	Title       string              `json:"title"`
+	Brand       string              `json:"brand"`
+	Category    string              `json:"category"`
+	Material    string              `json:"material"`
+	MaterialComposition *MaterialComposition `json:"material_composition,omitempty"`
+	MaterialFullText    string               `json:"material_full_text,omitempty"`
+	Dimensions  Dimension          `json:"dimensions"`
+	Weight      Weight             `json:"weight"`
+	Price       Price              `json:"price"`
+	Images      []string           `json:"images"`
+	ScrapedAt   time.Time          `json:"scraped_at"`
+	LastUpdated time.Time          `json:"last_updated"`
+}
+
+type MaterialComposition struct {
+	Materials  []MaterialItem `json:"materials"`
+	Confidence float64        `json:"confidence"`
+	Source     string         `json:"source"` // "structured", "regex", "fallback"
+}
+
+type MaterialItem struct {
+	Name    string  `json:"name"`    // "Baumwolle"
+	Percent float64 `json:"percent"` // 80.0
 }
 
 type Dimension struct {

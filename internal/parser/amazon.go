@@ -237,6 +237,209 @@ func (p *AmazonParser) ExtractMaterial(html string) (string, error) {
 	return "", fmt.Errorf("material not found")
 }
 
+// ExtractMaterialComposition extracts structured material data and fallback text
+func (p *AmazonParser) ExtractMaterialComposition(html string) (*models.MaterialComposition, string, error) {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return nil, "", err
+	}
+
+	var fullTextParts []string
+	var materialSources []struct {
+		text   string
+		source string
+	}
+
+	// 1. Try structured extraction first
+	var foundMaterial string
+	doc.Find(".a-fixed-left-grid-inner").Each(func(i int, s *goquery.Selection) {
+		leftCol := s.Find(".a-col-left .a-color-base")
+		rightCol := s.Find(".a-col-right .a-color-base")
+
+		leftText := strings.TrimSpace(leftCol.Text())
+		rightText := strings.TrimSpace(rightCol.Text())
+
+		// Check if this is the material composition row
+		if strings.Contains(strings.ToLower(leftText), "materialzusammensetzung") ||
+		   strings.Contains(strings.ToLower(leftText), "material") {
+			if rightText != "" {
+				if foundMaterial == "" {
+					foundMaterial = rightText
+				}
+				materialSources = append(materialSources, struct {
+					text   string
+					source string
+				}{leftText + ": " + rightText, "structured"})
+				fullTextParts = append(fullTextParts, leftText+": "+rightText)
+			}
+		}
+	})
+
+	// If we found structured material data, parse it
+	if foundMaterial != "" {
+		if composition := p.parseMaterialComposition(foundMaterial); composition != nil {
+			composition.Source = "structured"
+			return composition, strings.Join(fullTextParts, "; "), nil
+		}
+	}
+
+	// 2. Try regex patterns on full text
+	fullText := strings.TrimSpace(doc.Text())
+
+	for _, pattern := range p.materialPatterns {
+		matches := pattern.FindStringSubmatch(fullText)
+		if len(matches) > 1 {
+			material := strings.TrimSpace(matches[1])
+			if material != "" && !strings.Contains(strings.ToLower(material), "nicht angegeben") {
+				if composition := p.parseMaterialComposition(material); composition != nil {
+					composition.Source = "regex"
+					materialSources = append(materialSources, struct {
+						text   string
+						source string
+					}{material, "regex"})
+					fullTextParts = append(fullTextParts, material)
+					return composition, strings.Join(fullTextParts, "; "), nil
+				}
+			}
+		}
+	}
+
+	// 3. Look in product details
+	productDetails := p.extractProductDetails(doc)
+	for _, pattern := range p.materialPatterns {
+		matches := pattern.FindStringSubmatch(productDetails)
+		if len(matches) > 1 {
+			material := strings.TrimSpace(matches[1])
+			if material != "" && !strings.Contains(strings.ToLower(material), "nicht angegeben") {
+				if composition := p.parseMaterialComposition(material); composition != nil {
+					composition.Source = "product_details"
+					materialSources = append(materialSources, struct {
+						text   string
+						source string
+					}{material, "product_details"})
+					fullTextParts = append(fullTextParts, material)
+					return composition, strings.Join(fullTextParts, "; "), nil
+				}
+			}
+		}
+	}
+
+	// 4. Search in technical details as fallback
+	technicalDetails := doc.Find("#productDetails_techSpec_section_1, #productDetails_detailBullets_sections1").Text()
+	for _, pattern := range p.materialPatterns {
+		matches := pattern.FindStringSubmatch(technicalDetails)
+		if len(matches) > 1 {
+			material := strings.TrimSpace(matches[1])
+			if material != "" && !strings.Contains(strings.ToLower(material), "nicht angegeben") {
+				if composition := p.parseMaterialComposition(material); composition != nil {
+					composition.Source = "technical_details"
+					materialSources = append(materialSources, struct {
+						text   string
+						source string
+					}{material, "technical_details"})
+					fullTextParts = append(fullTextParts, material)
+					return composition, strings.Join(fullTextParts, "; "), nil
+				}
+			}
+		}
+	}
+
+	// 5. Collect all material-related text as fallback
+	p.collectAllMaterialText(doc, &fullTextParts)
+
+	if len(fullTextParts) > 0 {
+		// Return fallback with empty composition but full text
+		return nil, strings.Join(fullTextParts, "; "), nil
+	}
+
+	return nil, "", fmt.Errorf("material not found")
+}
+
+// parseMaterialComposition parses material text into structured data
+func (p *AmazonParser) parseMaterialComposition(text string) *models.MaterialComposition {
+	// Pattern for "80% Baumwolle, 20% Elasthan"
+	percentPattern := regexp.MustCompile(`(\d+(?:[,.]\d+)?)\s*%?\s*([^,]+)(?:,\s*|$)`)
+
+	// Pattern for "80% Baumwolle, 5% Elasthan, 15% Polyester" (multiple materials)
+	matches := percentPattern.FindAllStringSubmatch(text, -1)
+
+	if len(matches) == 0 {
+		// Try alternative patterns
+		if strings.Contains(strings.ToLower(text), "100%") {
+			material := strings.TrimSpace(strings.Replace(text, "100%", "", -1))
+			if material != "" {
+				return &models.MaterialComposition{
+					Materials: []models.MaterialItem{
+						{Name: material, Percent: 100.0},
+					},
+					Confidence: 0.9,
+				}
+			}
+		}
+		return nil
+	}
+
+	var materials []models.MaterialItem
+	totalPercent := 0.0
+
+	for _, match := range matches {
+		if len(match) >= 3 {
+			percentStr := strings.Replace(match[1], ",", ".", -1)
+			if percent, err := strconv.ParseFloat(percentStr, 64); err == nil {
+				material := strings.TrimSpace(match[2])
+				if material != "" {
+					materials = append(materials, models.MaterialItem{
+						Name:    material,
+						Percent: percent,
+					})
+					totalPercent += percent
+				}
+			}
+		}
+	}
+
+	if len(materials) == 0 {
+		return nil
+	}
+
+	// Calculate confidence based on total percentage and completeness
+	confidence := 0.7 // Base confidence
+	if totalPercent >= 95 && totalPercent <= 105 {
+		confidence = 0.95 // High confidence for complete compositions
+	} else if totalPercent >= 80 && totalPercent <= 120 {
+		confidence = 0.85 // Good confidence
+	}
+
+	return &models.MaterialComposition{
+		Materials:  materials,
+		Confidence: confidence,
+	}
+}
+
+// collectAllMaterialText collects all material-related text for learning purposes
+func (p *AmazonParser) collectAllMaterialText(doc *goquery.Document, textParts *[]string) {
+	keywords := []string{
+		"material", "stoff", "gewebe", "textil", "faser", "zusammensetzung",
+		"baumwolle", "cotton", "polyester", "elasthan", "spandex", "viskose",
+		"leinen", "linen", "seide", "silk", "wolle", "wool", "nylon",
+	}
+
+	fullText := strings.TrimSpace(doc.Text())
+
+	// Find sentences containing material keywords
+	sentences := regexp.MustCompile(`[^.!?]+[.!?]?`).FindAllString(fullText, -1)
+
+	for _, sentence := range sentences {
+		sentenceLower := strings.ToLower(sentence)
+		for _, keyword := range keywords {
+			if strings.Contains(sentenceLower, keyword) {
+				*textParts = append(*textParts, strings.TrimSpace(sentence))
+				break // Only add once per sentence
+			}
+		}
+	}
+}
+
 func (p *AmazonParser) extractTitle(doc *goquery.Document) string {
 	return strings.TrimSpace(doc.Find("#productTitle").Text())
 }

@@ -90,6 +90,77 @@ func (db *DB) UpdateProductSizes(ctx context.Context, asin string, sizeTable *Si
 	return nil
 }
 
+// UpdateProductMaterial updates the material data for a product
+func (db *DB) UpdateProductMaterial(ctx context.Context, asin string, materialComposition *models.MaterialComposition, materialFullText string) error {
+	var materialCompositionJSON []byte
+	var err error
+
+	if materialComposition != nil {
+		materialCompositionJSON, err = json.Marshal(materialComposition)
+		if err != nil {
+			return fmt.Errorf("failed to marshal material composition: %w", err)
+		}
+	}
+
+	query := `
+		UPDATE products SET
+			material_composition = $2,
+			material_full_text = $3,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE asin = $1`
+
+	_, err = db.pool.Exec(ctx, query,
+		asin, materialCompositionJSON, materialFullText,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to update product material: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateProductWithMaterialAndSize updates both material and size data for a product
+func (db *DB) UpdateProductWithMaterialAndSize(ctx context.Context, asin string, sizeTable *SizeTable, materialComposition *models.MaterialComposition, materialFullText string) error {
+	var sizeJSON []byte
+	var materialCompositionJSON []byte
+	var err error
+
+	if sizeTable != nil {
+		sizeJSON, err = json.Marshal(sizeTable)
+		if err != nil {
+			return fmt.Errorf("failed to marshal size table: %w", err)
+		}
+	}
+
+	if materialComposition != nil {
+		materialCompositionJSON, err = json.Marshal(materialComposition)
+		if err != nil {
+			return fmt.Errorf("failed to marshal material composition: %w", err)
+		}
+	}
+
+	query := `
+		UPDATE products SET
+			size_table = $2,
+			material_composition = $3,
+			material_full_text = $4,
+			status = $5,
+			scraped_at = CURRENT_TIMESTAMP,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE asin = $1`
+
+	_, err = db.pool.Exec(ctx, query,
+		asin, sizeJSON, materialCompositionJSON, materialFullText, StatusCompleted,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to update product with material and size: %w", err)
+	}
+
+	return nil
+}
+
 // UpdateProductStatus updates the status and error message
 // Deprecated: Use product lifecycle table methods instead
 func (db *DB) UpdateProductStatus(ctx context.Context, asin string, status ProductStatus, errorMsg string) error {
