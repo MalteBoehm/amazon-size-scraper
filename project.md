@@ -1,6 +1,6 @@
 ## Camoufox anti-detect browser evaluation for Amazon.de scraping
 
-Camoufox is an advanced anti-detect browser that offers superior fingerprint spoofing capabilities but faces critical maintenance issues and lacks production readiness, making it unsuitable for enterprise Amazon.de scraping operations despite its technical advantages.
+Camoufox is an advanced anti-detect browser that offers superior fingerprint spoofing capabilities but faces critical maintenance issues and lacks production readiness, making it unsuitable for enterprise Amazon.de scraping operations despite its techndical advantages.
 
 ## What Camoufox is and how it works technically
 
