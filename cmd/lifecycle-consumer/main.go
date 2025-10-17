@@ -154,28 +154,136 @@ func (c *Consumer) Run(ctx context.Context) error {
 }
 
 func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error {
-	// Check event type
-	eventType, ok := msg.Values["event_type"].(string)
-	if !ok || eventType != "NEW_PRODUCT_DETECTED" {
+	// Debug: Log all keys and values
+	keys := make([]string, 0, len(msg.Values))
+	for k := range msg.Values {
+		keys = append(keys, k)
+	}
+	c.logger.Info("DEBUG: Processing message",
+		"message_id", msg.ID,
+		"keys", keys,
+	)
+
+	// Debug: Check event type detection
+	eventType, hasEventType := msg.Values["event_type"].(string)
+	typeField, hasTypeField := msg.Values["type"].(string)
+
+	c.logger.Info("DEBUG: Event type detection",
+		"has_event_type", hasEventType,
+		"event_type", eventType,
+		"has_type_field", hasTypeField,
+		"type_field", typeField,
+		"expected_event_1", "01_PRODUCT_DETECTED",
+		"expected_event_2", "NEW_PRODUCT_DETECTED",
+	)
+
+	// Check for multiple possible event types that could indicate new products
+	validEventTypes := []string{
+		"01_PRODUCT_DETECTED",
+		"NEW_PRODUCT_DETECTED",
+		"02A_PRODUCT_VALIDATED", // From logs - this seems to be a valid event
+	}
+
+	isValidEvent := false
+	if hasEventType {
+		for _, validType := range validEventTypes {
+			if eventType == validType {
+				isValidEvent = true
+				break
+			}
+		}
+	} else if hasTypeField {
+		for _, validType := range validEventTypes {
+			if typeField == validType {
+				isValidEvent = true
+				eventType = typeField
+				break
+			}
+		}
+	}
+
+	if !isValidEvent {
+		c.logger.Info("Skipping non-matching event", "event_type", eventType, "type_field", typeField)
 		return nil // Skip non-matching events
 	}
 
-	// Get payload
-	payloadStr, ok := msg.Values["payload"].(string)
-	if !ok {
-		return fmt.Errorf("missing payload in event")
-	}
+	c.logger.Info("Processing valid event",
+		"event_type", eventType,
+		"message_id", msg.ID,
+	)
 
-	// Parse payload
+	// Try multiple payload structures
 	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(payloadStr), &payload); err != nil {
-		return fmt.Errorf("failed to parse payload: %w", err)
+
+	// Method 1: Direct values from the message
+	if dataField, ok := msg.Values["data"]; ok {
+		if dataStr, ok := dataField.(string); ok {
+			if err := json.Unmarshal([]byte(dataStr), &payload); err == nil {
+				c.logger.Info("Parsed payload from data field")
+			}
+		} else if dataMap, ok := dataField.(map[string]interface{}); ok {
+			payload = dataMap
+			c.logger.Info("Used payload from data map")
+		}
 	}
 
-	// Get ASIN from payload
-	asin, ok := payload["asin"].(string)
-	if !ok || asin == "" {
-		return fmt.Errorf("missing ASIN in payload")
+	// Method 2: Traditional payload field
+	if payload == nil {
+		if payloadStr, ok := msg.Values["payload"].(string); ok {
+			if err := json.Unmarshal([]byte(payloadStr), &payload); err == nil {
+				c.logger.Info("Parsed payload from payload field")
+			}
+		}
+	}
+
+	// Method 3: Direct message values as payload
+	if payload == nil {
+		payload = make(map[string]interface{})
+		for k, v := range msg.Values {
+			if k != "event_type" && k != "type" && k != "timestamp" {
+				payload[k] = v
+			}
+		}
+		c.logger.Info("Created payload from message values")
+	}
+
+	// Debug: Log the parsed payload
+	payloadBytes, _ := json.Marshal(payload)
+	c.logger.Info("DEBUG: Parsed payload", "payload", string(payloadBytes))
+
+	// Get ASIN from multiple possible locations
+	var asin string
+
+	// Method 1: Direct ASIN field in payload
+	if asinVal, ok := payload["asin"].(string); ok && asinVal != "" {
+		asin = asinVal
+	}
+
+	// Method 2: ASIN in aggregate_id
+	if asin == "" {
+		if aggregateID, ok := msg.Values["aggregate_id"].(string); ok && aggregateID != "" {
+			asin = aggregateID
+		}
+	}
+
+	// Method 3: ASIN in original_id
+	if asin == "" {
+		if originalID, ok := msg.Values["original_id"].(string); ok && originalID != "" {
+			asin = originalID
+		}
+	}
+
+	// Method 4: Try parsing from nested data structure
+	if asin == "" {
+		if data, ok := payload["data"].(map[string]interface{}); ok {
+			if asinVal, ok := data["asin"].(string); ok && asinVal != "" {
+				asin = asinVal
+			}
+		}
+	}
+
+	if asin == "" {
+		return fmt.Errorf("missing ASIN in payload/event")
 	}
 
 	c.logger.Info("Processing product", 
