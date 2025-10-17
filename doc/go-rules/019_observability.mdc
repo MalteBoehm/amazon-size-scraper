@@ -1,0 +1,582 @@
+# Rule: Observability and Monitoring
+
+Implement comprehensive observability with OpenTelemetry, structured logging, and metrics collection.
+
+## Structured Logging
+
+Use structured logging with correlation IDs:
+
+```go
+// Rule: Initialize structured logger with common fields
+func NewLogger(service string, version string) *slog.Logger {
+    opts := &slog.HandlerOptions{
+        Level: slog.LevelInfo,
+        AddSource: true,
+    }
+    
+    handler := slog.NewJSONHandler(os.Stdout, opts)
+    
+    // Add common fields
+    logger := slog.New(handler).With(
+        "service", service,
+        "version", version,
+        "pid", os.Getpid(),
+        "hostname", getHostname(),
+    )
+    
+    return logger
+}
+
+// Rule: Add request context to logs
+func LoggerMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            // Generate or extract trace ID
+            traceID := r.Header.Get("X-Trace-ID")
+            if traceID == "" {
+                traceID = generateTraceID()
+            }
+            
+            // Create logger with request context
+            reqLogger := logger.With(
+                "trace_id", traceID,
+                "method", r.Method,
+                "path", r.URL.Path,
+                "remote_addr", r.RemoteAddr,
+                "user_agent", r.UserAgent(),
+            )
+            
+            // Add logger to context
+            ctx := context.WithValue(r.Context(), loggerKey, reqLogger)
+            
+            // Wrap response writer to capture status
+            wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+            
+            start := time.Now()
+            next.ServeHTTP(wrapped, r.WithContext(ctx))
+            duration := time.Since(start)
+            
+            // Log request completion
+            reqLogger.Info("request completed",
+                "status", wrapped.statusCode,
+                "duration_ms", duration.Milliseconds(),
+                "bytes_written", wrapped.bytesWritten,
+            )
+        })
+    }
+}
+
+// Rule: Use log levels appropriately
+func (s *Service) ProcessOrder(ctx context.Context, order *Order) error {
+    logger := GetLogger(ctx)
+    
+    logger.Debug("processing order", "order_id", order.ID)
+    
+    if err := s.validateOrder(order); err != nil {
+        logger.Warn("order validation failed", 
+            "order_id", order.ID,
+            "error", err,
+        )
+        return err
+    }
+    
+    if err := s.chargePayment(ctx, order); err != nil {
+        logger.Error("payment processing failed",
+            "order_id", order.ID,
+            "amount", order.Total,
+            "currency", order.Currency,
+            "error", err,
+        )
+        return err
+    }
+    
+    logger.Info("order processed successfully", 
+        "order_id", order.ID,
+        "total", order.Total,
+    )
+    
+    return nil
+}
+```
+
+## OpenTelemetry Integration
+
+Implement distributed tracing with OpenTelemetry:
+
+```go
+// Rule: Initialize tracer provider
+func InitTracer(serviceName string, exporterEndpoint string) (*trace.TracerProvider, error) {
+    // Create OTLP exporter
+    exporter, err := otlptrace.New(
+        context.Background(),
+        otlptracegrpc.NewClient(
+            otlptracegrpc.WithEndpoint(exporterEndpoint),
+            otlptracegrpc.WithInsecure(),
+        ),
+    )
+    if err != nil {
+        return nil, fmt.Errorf("create exporter: %w", err)
+    }
+    
+    // Create resource
+    resource, err := resource.New(
+        context.Background(),
+        resource.WithAttributes(
+            semconv.ServiceNameKey.String(serviceName),
+            semconv.ServiceVersionKey.String(version),
+            semconv.DeploymentEnvironmentKey.String(environment),
+        ),
+        resource.WithHost(),
+        resource.WithContainer(),
+    )
+    if err != nil {
+        return nil, fmt.Errorf("create resource: %w", err)
+    }
+    
+    // Create tracer provider
+    tp := trace.NewTracerProvider(
+        trace.WithBatcher(exporter),
+        trace.WithResource(resource),
+        trace.WithSampler(trace.AlwaysSample()),
+    )
+    
+    // Set global provider
+    otel.SetTracerProvider(tp)
+    
+    // Set global propagator
+    otel.SetTextMapPropagator(
+        propagation.NewCompositeTextMapPropagator(
+            propagation.TraceContext{},
+            propagation.Baggage{},
+        ),
+    )
+    
+    return tp, nil
+}
+
+// Rule: Create spans for operations
+func (s *Service) GetProduct(ctx context.Context, productID string) (*Product, error) {
+    // Start span
+    ctx, span := otel.Tracer("product-service").Start(ctx, "GetProduct")
+    defer span.End()
+    
+    // Add attributes
+    span.SetAttributes(
+        attribute.String("product.id", productID),
+        attribute.String("db.system", "postgresql"),
+    )
+    
+    // Check cache
+    if product, found := s.checkCache(ctx, productID); found {
+        span.SetAttributes(attribute.Bool("cache.hit", true))
+        return product, nil
+    }
+    span.SetAttributes(attribute.Bool("cache.hit", false))
+    
+    // Query database
+    product, err := s.queryDatabase(ctx, productID)
+    if err != nil {
+        span.RecordError(err)
+        span.SetStatus(codes.Error, err.Error())
+        return nil, err
+    }
+    
+    span.SetStatus(codes.Ok, "")
+    return product, nil
+}
+
+// Rule: Propagate trace context across services
+func (c *HTTPClient) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
+    // Inject trace context into headers
+    otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
+    
+    // Create span for outgoing request
+    ctx, span := otel.Tracer("http-client").Start(ctx, fmt.Sprintf("%s %s", req.Method, req.URL.Path))
+    defer span.End()
+    
+    span.SetAttributes(
+        attribute.String("http.method", req.Method),
+        attribute.String("http.url", req.URL.String()),
+        attribute.String("http.target", req.URL.Path),
+        attribute.String("net.peer.name", req.URL.Host),
+    )
+    
+    resp, err := c.client.Do(req)
+    if err != nil {
+        span.RecordError(err)
+        span.SetStatus(codes.Error, err.Error())
+        return nil, err
+    }
+    
+    span.SetAttributes(
+        attribute.Int("http.status_code", resp.StatusCode),
+    )
+    
+    if resp.StatusCode >= 400 {
+        span.SetStatus(codes.Error, fmt.Sprintf("HTTP %d", resp.StatusCode))
+    } else {
+        span.SetStatus(codes.Ok, "")
+    }
+    
+    return resp, nil
+}
+```
+
+## Metrics Collection
+
+Implement metrics with OpenTelemetry:
+
+```go
+// Rule: Define service metrics
+type ServiceMetrics struct {
+    requestCounter  metric.Int64Counter
+    requestDuration metric.Float64Histogram
+    activeRequests  metric.Int64UpDownCounter
+    cacheHits       metric.Int64Counter
+    cacheMisses     metric.Int64Counter
+}
+
+func NewServiceMetrics(meter metric.Meter) (*ServiceMetrics, error) {
+    requestCounter, err := meter.Int64Counter(
+        "requests_total",
+        metric.WithDescription("Total number of requests"),
+        metric.WithUnit("1"),
+    )
+    if err != nil {
+        return nil, err
+    }
+    
+    requestDuration, err := meter.Float64Histogram(
+        "request_duration_seconds",
+        metric.WithDescription("Request duration in seconds"),
+        metric.WithUnit("s"),
+    )
+    if err != nil {
+        return nil, err
+    }
+    
+    activeRequests, err := meter.Int64UpDownCounter(
+        "active_requests",
+        metric.WithDescription("Number of active requests"),
+        metric.WithUnit("1"),
+    )
+    if err != nil {
+        return nil, err
+    }
+    
+    cacheHits, err := meter.Int64Counter(
+        "cache_hits_total",
+        metric.WithDescription("Total number of cache hits"),
+        metric.WithUnit("1"),
+    )
+    if err != nil {
+        return nil, err
+    }
+    
+    cacheMisses, err := meter.Int64Counter(
+        "cache_misses_total",
+        metric.WithDescription("Total number of cache misses"),
+        metric.WithUnit("1"),
+    )
+    if err != nil {
+        return nil, err
+    }
+    
+    return &ServiceMetrics{
+        requestCounter:  requestCounter,
+        requestDuration: requestDuration,
+        activeRequests:  activeRequests,
+        cacheHits:       cacheHits,
+        cacheMisses:     cacheMisses,
+    }, nil
+}
+
+// Rule: Record metrics in handlers
+func MetricsMiddleware(metrics *ServiceMetrics) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            start := time.Now()
+            
+            // Track active requests
+            metrics.activeRequests.Add(r.Context(), 1,
+                attribute.String("method", r.Method),
+                attribute.String("path", r.URL.Path),
+            )
+            defer metrics.activeRequests.Add(r.Context(), -1,
+                attribute.String("method", r.Method),
+                attribute.String("path", r.URL.Path),
+            )
+            
+            // Wrap response writer
+            wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+            
+            next.ServeHTTP(wrapped, r)
+            
+            duration := time.Since(start).Seconds()
+            
+            // Record metrics
+            metrics.requestCounter.Add(r.Context(), 1,
+                attribute.String("method", r.Method),
+                attribute.String("path", r.URL.Path),
+                attribute.Int("status", wrapped.statusCode),
+            )
+            
+            metrics.requestDuration.Record(r.Context(), duration,
+                attribute.String("method", r.Method),
+                attribute.String("path", r.URL.Path),
+                attribute.Int("status", wrapped.statusCode),
+            )
+        })
+    }
+}
+```
+
+## Custom Business Metrics
+
+Define and track business-specific metrics:
+
+```go
+// Rule: Create business metrics
+type BusinessMetrics struct {
+    productsCreated   metric.Int64Counter
+    ordersProcessed   metric.Int64Counter
+    revenueTotal      metric.Float64Counter
+    inventoryLevel    metric.Int64ObservableGauge
+    processingErrors  metric.Int64Counter
+}
+
+// Rule: Record business events
+func (m *BusinessMetrics) RecordProductCreated(ctx context.Context, product *Product) {
+    m.productsCreated.Add(ctx, 1,
+        attribute.String("category", product.Category),
+        attribute.String("status", product.Status),
+    )
+}
+
+func (m *BusinessMetrics) RecordOrderProcessed(ctx context.Context, order *Order) {
+    m.ordersProcessed.Add(ctx, 1,
+        attribute.String("payment_method", order.PaymentMethod),
+        attribute.String("shipping_method", order.ShippingMethod),
+    )
+    
+    m.revenueTotal.Add(ctx, order.Total,
+        attribute.String("currency", order.Currency),
+        attribute.String("region", order.Region),
+    )
+}
+
+// Rule: Use observable gauges for current state
+func (m *BusinessMetrics) RegisterInventoryCallback(db *sql.DB) error {
+    _, err := meter.Int64ObservableGauge(
+        "inventory_level",
+        metric.WithDescription("Current inventory level by product"),
+        metric.WithUnit("1"),
+        metric.WithInt64Callback(func(ctx context.Context, obs metric.Int64Observer) error {
+            rows, err := db.QueryContext(ctx, `
+                SELECT product_id, category, SUM(quantity) 
+                FROM inventory 
+                GROUP BY product_id, category
+            `)
+            if err != nil {
+                return err
+            }
+            defer rows.Close()
+            
+            for rows.Next() {
+                var productID, category string
+                var quantity int64
+                if err := rows.Scan(&productID, &category, &quantity); err != nil {
+                    continue
+                }
+                
+                obs.Observe(quantity,
+                    attribute.String("product_id", productID),
+                    attribute.String("category", category),
+                )
+            }
+            
+            return rows.Err()
+        }),
+    )
+    
+    return err
+}
+```
+
+## Error Tracking
+
+Track and categorize errors:
+
+```go
+// Rule: Categorize errors for better insights
+type ErrorTracker struct {
+    errorCounter metric.Int64Counter
+    logger       *slog.Logger
+}
+
+func (t *ErrorTracker) TrackError(ctx context.Context, err error, operation string) {
+    if err == nil {
+        return
+    }
+    
+    // Categorize error
+    errorType := categorizeError(err)
+    
+    // Extract trace context
+    span := trace.SpanFromContext(ctx)
+    traceID := span.SpanContext().TraceID().String()
+    
+    // Record metric
+    t.errorCounter.Add(ctx, 1,
+        attribute.String("operation", operation),
+        attribute.String("error_type", errorType),
+        attribute.String("error_code", getErrorCode(err)),
+    )
+    
+    // Log error with context
+    t.logger.Error("operation failed",
+        "operation", operation,
+        "error_type", errorType,
+        "error", err,
+        "trace_id", traceID,
+        "stack_trace", debug.Stack(),
+    )
+}
+
+func categorizeError(err error) string {
+    switch {
+    case errors.Is(err, context.Canceled):
+        return "canceled"
+    case errors.Is(err, context.DeadlineExceeded):
+        return "timeout"
+    case errors.Is(err, sql.ErrNoRows):
+        return "not_found"
+    case isNetworkError(err):
+        return "network"
+    case isValidationError(err):
+        return "validation"
+    default:
+        return "internal"
+    }
+}
+```
+
+## Health and Readiness
+
+Implement comprehensive health checks:
+
+```go
+// Rule: Separate liveness and readiness
+type HealthService struct {
+    checks []HealthCheck
+    mu     sync.RWMutex
+}
+
+type HealthCheck struct {
+    Name      string
+    Component string
+    Check     func(ctx context.Context) error
+    Critical  bool
+    Timeout   time.Duration
+}
+
+// Rule: Liveness check - is the service alive?
+func (h *HealthService) Liveness(w http.ResponseWriter, r *http.Request) {
+    // Simple check - can we respond?
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]string{
+        "status": "alive",
+        "time":   time.Now().Format(time.RFC3339),
+    })
+}
+
+// Rule: Readiness check - is the service ready to handle requests?
+func (h *HealthService) Readiness(w http.ResponseWriter, r *http.Request) {
+    ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+    defer cancel()
+    
+    results := make(map[string]interface{})
+    overallStatus := "ready"
+    
+    h.mu.RLock()
+    checks := h.checks
+    h.mu.RUnlock()
+    
+    for _, check := range checks {
+        checkCtx, checkCancel := context.WithTimeout(ctx, check.Timeout)
+        start := time.Now()
+        err := check.Check(checkCtx)
+        duration := time.Since(start)
+        checkCancel()
+        
+        status := "healthy"
+        var errMsg string
+        if err != nil {
+            status = "unhealthy"
+            errMsg = err.Error()
+            if check.Critical {
+                overallStatus = "not_ready"
+            }
+        }
+        
+        results[check.Name] = map[string]interface{}{
+            "status":      status,
+            "component":   check.Component,
+            "duration_ms": duration.Milliseconds(),
+            "error":       errMsg,
+        }
+    }
+    
+    // Set status code
+    statusCode := http.StatusOK
+    if overallStatus == "not_ready" {
+        statusCode = http.StatusServiceUnavailable
+    }
+    
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(statusCode)
+    json.NewEncoder(w).Encode(map[string]interface{}{
+        "status": overallStatus,
+        "checks": results,
+        "time":   time.Now().Format(time.RFC3339),
+    })
+}
+```
+
+## Profiling
+
+Enable profiling endpoints:
+
+```go
+// Rule: Add pprof endpoints for debugging
+func RegisterProfilingHandlers(mux *http.ServeMux) {
+    // Only enable in debug mode
+    if !isDebugMode() {
+        return
+    }
+    
+    mux.HandleFunc("/debug/pprof/", pprof.Index)
+    mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+    mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+    mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+    mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+    
+    // Custom profiling endpoint
+    mux.HandleFunc("/debug/goroutines", func(w http.ResponseWriter, r *http.Request) {
+        buf := make([]byte, 1<<20)
+        stackLen := runtime.Stack(buf, true)
+        w.Header().Set("Content-Type", "text/plain")
+        w.Write(buf[:stackLen])
+    })
+}
+```
+
+## Best Practices
+
+1. **Correlation IDs**: Always propagate correlation IDs across service boundaries
+2. **Sampling**: Use appropriate sampling rates for high-traffic services
+3. **Cardinality**: Avoid high-cardinality labels in metrics
+4. **Context**: Always pass context through the call chain
+5. **Error Details**: Include enough context in errors for debugging
+6. **Performance**: Monitor the overhead of observability itself
+7. **Dashboards**: Create service-specific dashboards with key metrics

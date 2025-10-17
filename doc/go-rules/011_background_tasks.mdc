@@ -1,0 +1,26 @@
+---
+description: 
+globs: **/cmd/api/helpers.go,**/cmd/api/handlers.go,**/cmd/api/main.go,**/cmd/api/server.go
+alwaysApply: false
+---
+# Background Tasks &---
+description: Richtlinien für die Ausführung von Hintergrundaufgaben (Goroutinen) und deren Koordination mit Graceful Shutdown in Go
+globs:
+  - "**/cmd/api/helpers.go" # Where background helper might live
+  - "**/cmd/api/handlers.go" # Where background tasks are initiated
+  - "**/cmd/api/main.go" # For WaitGroup definition
+  - "**/cmd/api/server.go" # For shutdown coordination
+alwaysApply: false
+--- Graceful Shutdown
+
+- Use background goroutines for tasks that shouldn't block the main request-response cycle (e.g., sending emails).
+- Launch goroutines using the `go` keyword: `go func() { ... }()`.
+- Be aware that variables from the enclosing scope are 'closed over' by the goroutine's function literal. Avoid unintended modifications if variables are shared. Pass necessary data explicitly if needed.
+- **Panic Recovery:** Panics in background goroutines are *not* caught by HTTP server or standard middleware panic recovery. They will terminate the entire application.
+    - Implement manual panic recovery within each background goroutine using `defer func() { if err := recover(); err != nil { app.logger.Error(...) } }()`.
+    - Create a `background(fn func())` helper method on `application` to encapsulate launching a goroutine with panic recovery and WaitGroup integration.
+- **Graceful Shutdown Coordination:**
+    - Add a `sync.WaitGroup` field to the `application` struct.
+    - Increment the WaitGroup counter (`app.wg.Add(1)`) *before* launching a background goroutine (e.g., inside the `app.background()` helper).
+    - Decrement the WaitGroup counter (`defer app.wg.Done()`) when the background goroutine finishes (e.g., inside the deferred function within `app.background()`).
+    - In the `app.serve()` function, after initiating the server shutdown (`srv.Shutdown()`) and before exiting, call `app.wg.Wait()` to block until all background tasks have completed. Log messages indicating the start and end of this waiting period.

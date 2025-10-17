@@ -1,0 +1,33 @@
+---
+description: Richtlinien für Datenbankinteraktionen in Go
+globs: **/database/*.go,**/db/*.go,**/models/*.go
+alwaysApply: false
+---
+
+# Database (`database/sql` & PostgreSQL)
+
+- Use the standard `database/sql` package.
+- Install and import the PostgreSQL driver (`github.com/lib/pq`) using a blank identifier (`_`).
+- Create a long-lived `*sql.DB` connection pool in `main()` using `sql.Open("postgres", dsn)`.
+- Configure the connection pool settings using command-line flags and `db.SetMaxOpenConns()`, `db.SetMaxIdleConns()`, `db.SetConnMaxIdleTime()`. Choose sensible defaults (e.g., 25 max open/idle, 15m idle time).
+- Verify the database connection using `db.PingContext()` with a timeout (`context.WithTimeout`) after opening.
+- Defer `db.Close()` in `main()`.
+- Define model structs (e.g., `Movie`, `User`, `Token`, `Permission`) and model types (e.g., `MovieModel`, `UserModel`, `TokenModel`, `PermissionModel`) with embedded `*sql.DB` in the `internal/data` package.
+- Group models under a parent `Models` struct for easier dependency injection.
+- Use `$N` notation for placeholder parameters in SQL queries.
+- Use `DB.ExecContext()` or `Tx.ExecContext()` for `INSERT`, `UPDATE`, `DELETE` statements that don't return rows (or where rows aren't needed). Check `RowsAffected()` on the `sql.Result` if necessary (e.g., for DELETE).
+- Use `DB.QueryRowContext()` or `Tx.QueryRowContext()` for queries expected to return at most one row. Always call `.Scan()` on the result.
+- Use `DB.QueryContext()` or `Tx.QueryContext()` for queries expected to return multiple rows. Iterate using `rows.Next()`, call `rows.Scan()` in the loop, check `rows.Err()` after the loop, and `defer rows.Close()`.
+- Always use context-aware methods (`ExecContext`, `QueryRowContext`, `QueryContext`) with a timeout (`context.WithTimeout`) to prevent long-running queries from blocking indefinitely. Pass `context.Background()` as the parent context unless request-specific cancellation is desired (see advanced context patterns).
+- Handle `sql.ErrNoRows` specifically when using `QueryRowContext().Scan()`. Return a custom `data.ErrRecordNotFound` error instead.
+- Define and handle custom model-specific errors (e.g., `data.ErrDuplicateEmail`, `data.ErrEditConflict`) by checking specific database error codes or messages if necessary (e.g., checking for unique constraint violation `pq: duplicate key value violates unique constraint "users_email_key"`).
+- Use transactions (`db.BeginTx()`, `tx.ExecContext()`, `tx.QueryRowContext()`, `tx.QueryContext()`, `tx.Commit()`, `defer tx.Rollback()`) for atomic operations. Pass the context to `BeginTx`.
+- Use appropriate PostgreSQL data types: `bigserial` for auto-incrementing IDs, `timestamp(0) with time zone` for timestamps, `text` for general strings, `citext` for case-insensitive unique fields like email (requires `CREATE EXTENSION citext`), `bytea` for binary data (like password hashes), `text[]` for string arrays (like genres).
+- Use the `pq.Array()` adapter when scanning into or passing Go slices (`[]string`, `[]int`, etc.) as arguments for PostgreSQL array columns (`text[]`, `integer[]`, etc.).
+- Leverage PostgreSQL features like `RETURNING` clause with `INSERT`, `UPDATE`, `DELETE` to get generated/updated values (like ID, created_at, version) back without a separate query. Use `QueryRowContext().Scan()` to retrieve these values.
+- Implement Optimistic Concurrency Control (OCC) using an integer `version` column in tables. Increment the version on each update (`SET version = version + 1`). Include the expected version in the `WHERE` clause of `UPDATE` statements (`WHERE id = $N AND version = $M`). If `QueryRowContext().Scan()` returns `sql.ErrNoRows` on an update, return `data.ErrEditConflict`.
+- Use `INNER JOIN` for querying across related tables (e.g., users and tokens, users and permissions via users_permissions).
+- Define foreign key constraints (`REFERENCES users ON DELETE CASCADE`) to maintain relational integrity and handle cascading deletes where appropriate.
+- Use database indexes (e.g., `CREATE INDEX ... USING GIN`) to optimize queries, especially for array columns (`genres`) and full-text search (`to_tsvector`).
+- Use window functions like `count(*) OVER()` to efficiently retrieve total filtered record counts alongside paginated results for metadata calculation.
+- Implement filtering, sorting, and pagination directly in SQL using `WHERE`, `ORDER BY`, `LIMIT`, and `OFFSET` clauses. Construct dynamic `WHERE` clauses carefully (e.g., `WHERE (LOWER(column) = LOWER($1) OR $1 = '')`) and interpolate `ORDER BY` clauses safely using safelisted values.

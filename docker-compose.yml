@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: amazon-scraper-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tall_affiliate
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: amazon-scraper-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  amazon-scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile.scraper
+    container_name: amazon-scraper-service
+    environment:
+      # Server
+      PORT: 8084
+      
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: tall_affiliate
+      DB_MAX_CONNS: 20
+      
+      # Redis
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: 0
+      
+      # Scraper
+      SCRAPER_HEADLESS: "true"
+      SCRAPER_TIMEOUT: 30
+      SCRAPER_WORKERS: 2
+      SCRAPER_RATE_LIMIT: 3
+      SCRAPER_MAX_RETRIES: 3
+    ports:
+      - "8084:8084"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Migration runner
+  migrate:
+    image: migrate/migrate
+    container_name: amazon-scraper-migrate
+    volumes:
+      - ./migrations:/migrations
+    command: |
+      -path=/migrations
+      -database=postgres://postgres:postgres@postgres:5432/tall_affiliate?sslmode=disable
+      up
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

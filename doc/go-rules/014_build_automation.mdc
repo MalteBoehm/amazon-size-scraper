@@ -1,0 +1,81 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+---
+description: 
+globs: **/Makefile,**/cmd/api/main.go,**/internal/vcs/vcs.go,**/*.go,**/go.mod
+alwaysApply: false
+---
+---
+description: Richtlinien für Build-Automatisierung (Makefiles), Vendoring, Binary-Erstellung und Versionierung in Go-Projekten
+globs:
+  - "**/Makefile"
+  - "**/cmd/api/main.go" # For version flag/variable
+  - "**/internal/vcs/vcs.go" # For version helper
+  - "**/*.go" # Relevant for audit/tidy rules
+  - "**/go.mod"
+alwaysApply: false # Makefile focus primarily
+---
+# Build, Automation & Versioning
+
+## Makefiles
+
+- Use `make` and a `Makefile` in the project root to automate common development, build, and deployment tasks.
+- Define rules with `target:` and tab-indented `command` lines.
+- Use comments (`#`) for documentation. Add structured help comments (`## target: description`) and a `help` target that parses and displays them. Make `help` the first target so it runs by default.
+- Declare targets that represent actions (not files) as phony using `.PHONY: target`. Declare all action targets as phony to avoid conflicts with potential filenames.
+- Use environment variables within make rules via `${VAR_NAME}` syntax (e.g., `${GREENLIGHT_DB_DSN}`).
+- Pass command-line arguments to make rules: `make target name=value`. Access them using `${name}`. Escape literal `$` characters needed in commands with `$$`.
+- Use namespaces for targets using `/` (e.g., `run/api`, `db/migrations/up`, `production/deploy/api`).
+- Use prerequisite targets to enforce dependencies or confirmation steps (e.g., `db/migrations/up: confirm`).
+- Use `@` prefix on commands to suppress echoing the command itself.
+- Use `include .envrc` at the top of the Makefile to load variables from a `.envrc` file (useful for secrets like DSNs, API keys). Ensure `.envrc` is in `.gitignore`.
+
+## Quality Control
+
+- Implement `make audit` rule:
+    - `go mod tidy -diff`: Check if go.mod/go.sum are outdated.
+    - `go mod verify`: Check module cache integrity.
+    - `go vet ./...`: Run Go static analysis checks.
+    - `staticcheck ./...` (or `go tool staticcheck ./...`): Run additional static analysis checks (install `staticcheck` or add as tool dependency).
+    - `go test -race -vet=off ./...`: Run tests with race detector enabled (disable built-in vet).
+- Implement `make tidy` rule:
+    - `go mod tidy`: Tidy go.mod/go.sum.
+    - `go mod verify`: Verify dependencies.
+    - `go mod vendor`: Vendor dependencies into `./vendor/`.
+    - `go fmt ./...`: Format Go code.
+
+## Vendoring
+
+- Use `go mod vendor` to copy dependency source code into the `./vendor` directory.
+- Check the `vendor` directory into version control if you need complete independence from module proxies or upstream repositories. Be aware this significantly increases repository size.
+- If vendoring, the `go` tool (build, run, test) will automatically use the `vendor` directory instead of the module cache.
+- Run `go mod vendor` regularly (e.g., as part of `make tidy`) to keep the `vendor` directory synchronized with `go.mod`.
+- Avoid manually editing files within the `vendor` directory.
+
+## Building Binaries
+
+- Use `go build` to create executable binaries.
+- Use the `-o` flag to specify the output path (e.g., `go build -o=./bin/api ./cmd/api`).
+- Use `-ldflags="-s"` to strip debugging information (symbol tables and DWARF) and reduce binary size (~25%). Use `-ldflags="-w"` to strip only DWARF.
+- Cross-compile binaries for different platforms/architectures by setting `GOOS` and `GOARCH` environment variables before `go build` (e.g., `GOOS=linux GOARCH=amd64 go build ...`).
+- Create separate build rules or steps in the Makefile for development and production binaries (e.g., `build/api` for local OS, `build/api/linux` for deployment target).
+- Add the `./bin/` directory to `.gitignore` to avoid committing binaries.
+
+## Versioning
+
+- Add a `-version` boolean flag to the application to display version information and exit.
+- Store the application version in a variable (e.g., `var version string`) in `main.go`.
+- **Automatic Versioning (Git):**
+    - Initialize a Git repository (`git init`).
+    - Go automatically embeds build information (VCS type, revision hash, commit time, modified status, module path/version) when `go build` is run on a `main` package within a Git repository.
+    - Access this information at runtime using `runtime/debug.ReadBuildInfo()`.
+    - Create a helper package (`internal/vcs`) with a `Version()` function that calls `ReadBuildInfo()` and returns the `bi.Main.Version` (pseudo-version) or a formatted string.
+    - Set the `version` variable in `main.go` using `vcs.Version()`.
+    - Use `git tag vX.Y.Z` to tag releases. `go build` will then embed the tag as the version instead of a pseudo-version. Commits after a tag will result in pseudo-versions based on the tag (e.g., `v1.0.1-0-<hash>`).
+    - Be aware that `go run` does *not* embed version info (shows `(devel)`). `go test` only embeds it if `-buildvcs=true` is used.
+- **Manual Versioning (Linker Flags):**
+    - (Less common now) Use the `-X` linker flag to 'burn-in' a version string at build time: `go build -ldflags="-X main.version=1.2.3" ...`. This requires the `version` variable in `main.go` to be defined at the package level. Useful if version info comes from an external source not available to `ReadBuildInfo`.
+- Publish the version via `expvar` using `expvar.NewString("version").Set(version)`.

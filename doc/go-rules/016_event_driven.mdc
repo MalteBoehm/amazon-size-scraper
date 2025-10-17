@@ -1,0 +1,286 @@
+# Rule: Event-Driven Architecture
+
+Implement event-driven patterns using Redis Streams with transactional outbox pattern for reliability.
+
+## Event Publishing
+
+Use transactional outbox pattern to ensure events are published reliably:
+
+```go
+// Rule: Always publish events within database transaction
+func (s *Service) CreateProduct(ctx context.Context, product *Product) error {
+    tx, err := s.db.BeginTx(ctx, nil)
+    if err != nil {
+        return fmt.Errorf("begin transaction: %w", err)
+    }
+    defer tx.Rollback()
+
+    // 1. Business logic
+    if err := s.insertProduct(ctx, tx, product); err != nil {
+        return fmt.Errorf("insert product: %w", err)
+    }
+
+    // 2. Insert event into outbox
+    event := events.NewProductCreatedEvent(product.ID, product)
+    if err := s.insertOutboxEvent(ctx, tx, event); err != nil {
+        return fmt.Errorf("insert outbox event: %w", err)
+    }
+
+    // 3. Commit transaction
+    if err := tx.Commit(); err != nil {
+        return fmt.Errorf("commit transaction: %w", err)
+    }
+
+    return nil
+}
+
+// Rule: Outbox processor publishes events to Redis
+type OutboxProcessor struct {
+    db        *sql.DB
+    redis     *redis.Client
+    logger    *slog.Logger
+    interval  time.Duration
+}
+
+func (p *OutboxProcessor) Start(ctx context.Context) {
+    ticker := time.NewTicker(p.interval)
+    defer ticker.Stop()
+
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-ticker.C:
+            p.processOutboxEvents(ctx)
+        }
+    }
+}
+```
+
+## Event Schema
+
+Define events with clear schemas and versioning:
+
+```go
+// Rule: Event types must be versioned
+type EventType string
+
+const (
+    EventTypeProductCreatedV1   EventType = "PRODUCT_CREATED_V1"
+    EventTypeProductValidatedV1 EventType = "PRODUCT_VALIDATED_V1"
+)
+
+// Rule: Events must include metadata
+type EventMetadata struct {
+    ID            string    `json:"id"`
+    Type          EventType `json:"type"`
+    Version       string    `json:"version"`
+    Timestamp     time.Time `json:"timestamp"`
+    CorrelationID string    `json:"correlation_id"`
+    Source        string    `json:"source"`
+}
+
+// Rule: Event payloads must be backward compatible
+type ProductCreatedEventV1 struct {
+    Metadata  EventMetadata `json:"metadata"`
+    ProductID string        `json:"product_id"`
+    ASIN      string        `json:"asin"`
+    Title     string        `json:"title"`
+    // New fields must be optional for backward compatibility
+    Category  *string       `json:"category,omitempty"`
+}
+```
+
+## Event Consumption
+
+Implement reliable event consumption with proper error handling:
+
+```go
+// Rule: Use consumer groups for scalability
+type EventConsumer struct {
+    redis        *redis.Client
+    logger       *slog.Logger
+    groupName    string
+    consumerName string
+    handlers     map[EventType]EventHandler
+}
+
+// Rule: Event handlers must be idempotent
+type EventHandler func(ctx context.Context, event json.RawMessage) error
+
+// Rule: Implement retry logic with exponential backoff
+func (c *EventConsumer) consumeWithRetry(ctx context.Context, msg redis.XMessage) error {
+    maxRetries := 3
+    backoff := 1 * time.Second
+
+    for attempt := 0; attempt < maxRetries; attempt++ {
+        if err := c.processMessage(ctx, msg); err != nil {
+            if attempt < maxRetries-1 {
+                c.logger.Warn("event processing failed, retrying",
+                    "attempt", attempt+1,
+                    "backoff", backoff,
+                    "error", err)
+                time.Sleep(backoff)
+                backoff *= 2
+                continue
+            }
+            return err
+        }
+        return nil
+    }
+    return fmt.Errorf("max retries exceeded")
+}
+```
+
+## Dead Letter Queue
+
+Handle failed events gracefully:
+
+```go
+// Rule: Move failed events to DLQ after max retries
+func (c *EventConsumer) handleFailedEvent(ctx context.Context, msg redis.XMessage, err error) {
+    dlqKey := fmt.Sprintf("dlq:%s", c.groupName)
+    
+    // Add to DLQ with error metadata
+    dlqEntry := map[string]interface{}{
+        "original_message": msg,
+        "error":           err.Error(),
+        "failed_at":       time.Now().Unix(),
+        "consumer":        c.consumerName,
+        "retry_count":     3,
+    }
+    
+    if err := c.redis.XAdd(ctx, &redis.XAddArgs{
+        Stream: dlqKey,
+        Values: dlqEntry,
+    }).Err(); err != nil {
+        c.logger.Error("failed to add to DLQ", "error", err)
+    }
+    
+    // Acknowledge original message to prevent reprocessing
+    c.redis.XAck(ctx, msg.Stream, c.groupName, msg.ID)
+}
+```
+
+## Idempotency
+
+Ensure event handlers are idempotent:
+
+```go
+// Rule: Use event ID for deduplication
+type IdempotencyStore struct {
+    redis *redis.Client
+    ttl   time.Duration
+}
+
+func (s *IdempotencyStore) CheckAndSet(ctx context.Context, eventID string) (bool, error) {
+    key := fmt.Sprintf("processed:%s", eventID)
+    
+    // SetNX returns true if key was set (first time processing)
+    wasSet, err := s.redis.SetNX(ctx, key, time.Now().Unix(), s.ttl).Result()
+    if err != nil {
+        return false, fmt.Errorf("check idempotency: %w", err)
+    }
+    
+    return wasSet, nil
+}
+
+// Rule: Check idempotency before processing
+func (h *Handler) Handle(ctx context.Context, event *Event) error {
+    isNew, err := h.idempotency.CheckAndSet(ctx, event.Metadata.ID)
+    if err != nil {
+        return fmt.Errorf("idempotency check: %w", err)
+    }
+    
+    if !isNew {
+        h.logger.Debug("event already processed", "event_id", event.Metadata.ID)
+        return nil
+    }
+    
+    // Process event...
+    return h.processEvent(ctx, event)
+}
+```
+
+## Event Ordering
+
+Handle event ordering when necessary:
+
+```go
+// Rule: Use Redis Stream's natural ordering
+// Rule: Process events sequentially per aggregate when ordering matters
+type OrderedEventProcessor struct {
+    processors map[string]*sync.Mutex // Per aggregate locks
+    mu         sync.RWMutex
+}
+
+func (p *OrderedEventProcessor) Process(ctx context.Context, event Event) error {
+    // Get or create mutex for this aggregate
+    p.mu.Lock()
+    if p.processors[event.AggregateID] == nil {
+        p.processors[event.AggregateID] = &sync.Mutex{}
+    }
+    processor := p.processors[event.AggregateID]
+    p.mu.Unlock()
+    
+    // Process events for this aggregate sequentially
+    processor.Lock()
+    defer processor.Unlock()
+    
+    return p.handleEvent(ctx, event)
+}
+```
+
+## Monitoring
+
+Add proper monitoring for event flow:
+
+```go
+// Rule: Track event metrics
+type EventMetrics struct {
+    published   *expvar.Int
+    consumed    *expvar.Int
+    failed      *expvar.Int
+    dlqSize     *expvar.Int
+    lagMs       *expvar.Float
+}
+
+// Rule: Monitor consumer lag
+func (m *EventMetrics) UpdateLag(streamKey string, groupName string) {
+    // Get pending messages count
+    pending, _ := redis.XPending(ctx, streamKey, groupName).Result()
+    
+    if pending.Count > 0 {
+        // Calculate lag based on oldest pending message
+        oldestTime, _ := strconv.ParseInt(strings.Split(pending.Lower, "-")[0], 10, 64)
+        lagMs := float64(time.Now().UnixMilli() - oldestTime)
+        m.lagMs.Set(lagMs)
+    }
+}
+```
+
+## Best Practices
+
+1. **Event Naming**: Use past tense for events (ProductCreated, not CreateProduct)
+2. **Event Size**: Keep events small, store large data separately
+3. **Schema Evolution**: Only add optional fields, never remove or change existing
+4. **Correlation IDs**: Always include for distributed tracing
+5. **Testing**: Test idempotency and failure scenarios
+
+```go
+// Rule: Test event handlers with various scenarios
+func TestEventHandler_Idempotency(t *testing.T) {
+    // Process same event twice
+    event := createTestEvent()
+    
+    err1 := handler.Handle(ctx, event)
+    assert.NoError(t, err1)
+    
+    err2 := handler.Handle(ctx, event)
+    assert.NoError(t, err2)
+    
+    // Verify side effects happened only once
+    count := getProcessedCount(event.ID)
+    assert.Equal(t, 1, count)
+}
+```

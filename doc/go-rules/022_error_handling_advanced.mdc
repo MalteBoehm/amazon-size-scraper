@@ -1,0 +1,625 @@
+# Rule: Advanced Error Handling
+
+Implement sophisticated error handling patterns with proper context, wrapping, and user-facing messages.
+
+## Custom Error Types
+
+Define domain-specific error types:
+
+```go
+// Rule: Create typed errors for different domains
+type ErrorType string
+
+const (
+    ErrorTypeValidation   ErrorType = "validation"
+    ErrorTypeNotFound     ErrorType = "not_found"
+    ErrorTypeConflict     ErrorType = "conflict"
+    ErrorTypeUnauthorized ErrorType = "unauthorized"
+    ErrorTypeForbidden    ErrorType = "forbidden"
+    ErrorTypeRateLimit    ErrorType = "rate_limit"
+    ErrorTypeExternal     ErrorType = "external"
+    ErrorTypeInternal     ErrorType = "internal"
+    ErrorTypeTimeout      ErrorType = "timeout"
+)
+
+// Rule: Base error type with rich context
+type AppError struct {
+    Type       ErrorType              `json:"type"`
+    Code       string                 `json:"code"`
+    Message    string                 `json:"message"`
+    Details    map[string]interface{} `json:"details,omitempty"`
+    Internal   error                  `json:"-"`
+    StackTrace string                 `json:"-"`
+    RequestID  string                 `json:"request_id,omitempty"`
+}
+
+func (e *AppError) Error() string {
+    if e.Internal != nil {
+        return fmt.Sprintf("%s: %s (internal: %v)", e.Code, e.Message, e.Internal)
+    }
+    return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+func (e *AppError) Unwrap() error {
+    return e.Internal
+}
+
+// Rule: Builder pattern for error construction
+type ErrorBuilder struct {
+    err *AppError
+}
+
+func NewError(errorType ErrorType, code string) *ErrorBuilder {
+    return &ErrorBuilder{
+        err: &AppError{
+            Type:       errorType,
+            Code:       code,
+            Details:    make(map[string]interface{}),
+            StackTrace: string(debug.Stack()),
+        },
+    }
+}
+
+func (b *ErrorBuilder) WithMessage(msg string, args ...interface{}) *ErrorBuilder {
+    b.err.Message = fmt.Sprintf(msg, args...)
+    return b
+}
+
+func (b *ErrorBuilder) WithInternal(err error) *ErrorBuilder {
+    b.err.Internal = err
+    return b
+}
+
+func (b *ErrorBuilder) WithDetail(key string, value interface{}) *ErrorBuilder {
+    b.err.Details[key] = value
+    return b
+}
+
+func (b *ErrorBuilder) WithRequestID(id string) *ErrorBuilder {
+    b.err.RequestID = id
+    return b
+}
+
+func (b *ErrorBuilder) Build() *AppError {
+    return b.err
+}
+```
+
+## Error Wrapping and Context
+
+Implement proper error wrapping:
+
+```go
+// Rule: Wrap errors with context
+func WrapError(err error, msg string) error {
+    if err == nil {
+        return nil
+    }
+    
+    // If already an AppError, add context
+    var appErr *AppError
+    if errors.As(err, &appErr) {
+        appErr.Message = fmt.Sprintf("%s: %s", msg, appErr.Message)
+        return appErr
+    }
+    
+    // Create new AppError
+    return NewError(ErrorTypeInternal, "INTERNAL_ERROR").
+        WithMessage(msg).
+        WithInternal(err).
+        Build()
+}
+
+// Rule: Context-aware error wrapping
+func WrapErrorWithContext(ctx context.Context, err error, operation string) error {
+    if err == nil {
+        return nil
+    }
+    
+    // Extract request ID from context
+    requestID := GetRequestID(ctx)
+    
+    // Extract user info
+    userID := GetUserID(ctx)
+    
+    return NewError(ErrorTypeInternal, "OPERATION_FAILED").
+        WithMessage("operation failed: %s", operation).
+        WithInternal(err).
+        WithRequestID(requestID).
+        WithDetail("operation", operation).
+        WithDetail("user_id", userID).
+        Build()
+}
+
+// Rule: Multi-error handling
+type MultiError struct {
+    errors []error
+}
+
+func (m *MultiError) Add(err error) {
+    if err != nil {
+        m.errors = append(m.errors, err)
+    }
+}
+
+func (m *MultiError) Error() string {
+    if len(m.errors) == 0 {
+        return ""
+    }
+    
+    var msgs []string
+    for _, err := range m.errors {
+        msgs = append(msgs, err.Error())
+    }
+    return fmt.Sprintf("multiple errors: %s", strings.Join(msgs, "; "))
+}
+
+func (m *MultiError) HasErrors() bool {
+    return len(m.errors) > 0
+}
+
+func (m *MultiError) Errors() []error {
+    return m.errors
+}
+```
+
+## Validation Errors
+
+Handle validation errors with field-level details:
+
+```go
+// Rule: Structured validation errors
+type ValidationError struct {
+    Fields []FieldError `json:"fields"`
+}
+
+type FieldError struct {
+    Field   string      `json:"field"`
+    Value   interface{} `json:"value,omitempty"`
+    Code    string      `json:"code"`
+    Message string      `json:"message"`
+}
+
+func NewValidationError() *ValidationError {
+    return &ValidationError{
+        Fields: []FieldError{},
+    }
+}
+
+func (v *ValidationError) AddFieldError(field, code, message string, value ...interface{}) {
+    fieldErr := FieldError{
+        Field:   field,
+        Code:    code,
+        Message: message,
+    }
+    
+    if len(value) > 0 {
+        fieldErr.Value = value[0]
+    }
+    
+    v.Fields = append(v.Fields, fieldErr)
+}
+
+func (v *ValidationError) HasErrors() bool {
+    return len(v.Fields) > 0
+}
+
+func (v *ValidationError) Error() string {
+    if len(v.Fields) == 0 {
+        return "validation error"
+    }
+    
+    var msgs []string
+    for _, field := range v.Fields {
+        msgs = append(msgs, fmt.Sprintf("%s: %s", field.Field, field.Message))
+    }
+    return strings.Join(msgs, ", ")
+}
+
+// Rule: Common validation functions
+func ValidateStruct(v interface{}) *ValidationError {
+    validationErr := NewValidationError()
+    
+    // Example using reflection or validation library
+    val := reflect.ValueOf(v)
+    typ := val.Type()
+    
+    for i := 0; i < val.NumField(); i++ {
+        field := typ.Field(i)
+        value := val.Field(i)
+        
+        // Check required
+        if tag := field.Tag.Get("required"); tag == "true" && isZero(value) {
+            validationErr.AddFieldError(
+                field.Name,
+                "required",
+                fmt.Sprintf("%s is required", field.Name),
+            )
+        }
+        
+        // Check min length
+        if minLen := field.Tag.Get("minlen"); minLen != "" {
+            if checkMinLen(value, minLen) {
+                validationErr.AddFieldError(
+                    field.Name,
+                    "min_length",
+                    fmt.Sprintf("%s must be at least %s characters", field.Name, minLen),
+                )
+            }
+        }
+    }
+    
+    if validationErr.HasErrors() {
+        return validationErr
+    }
+    return nil
+}
+```
+
+## Error Recovery
+
+Implement error recovery strategies:
+
+```go
+// Rule: Implement circuit breaker for error recovery
+type ErrorThreshold struct {
+    mu              sync.RWMutex
+    errors          []time.Time
+    threshold       int
+    window          time.Duration
+    backoffDuration time.Duration
+    lastBackoff     time.Time
+}
+
+func NewErrorThreshold(threshold int, window, backoff time.Duration) *ErrorThreshold {
+    return &ErrorThreshold{
+        threshold:       threshold,
+        window:          window,
+        backoffDuration: backoff,
+        errors:          []time.Time{},
+    }
+}
+
+func (et *ErrorThreshold) RecordError() bool {
+    et.mu.Lock()
+    defer et.mu.Unlock()
+    
+    now := time.Now()
+    
+    // Remove old errors outside window
+    cutoff := now.Add(-et.window)
+    validErrors := []time.Time{}
+    for _, errTime := range et.errors {
+        if errTime.After(cutoff) {
+            validErrors = append(validErrors, errTime)
+        }
+    }
+    
+    // Add new error
+    validErrors = append(validErrors, now)
+    et.errors = validErrors
+    
+    // Check if threshold exceeded
+    if len(validErrors) >= et.threshold {
+        et.lastBackoff = now
+        return true
+    }
+    
+    return false
+}
+
+func (et *ErrorThreshold) ShouldBackoff() bool {
+    et.mu.RLock()
+    defer et.mu.RUnlock()
+    
+    return time.Since(et.lastBackoff) < et.backoffDuration
+}
+
+// Rule: Implement retry with error classification
+func RetryWithErrorClassification(ctx context.Context, fn func() error, classifier func(error) bool) error {
+    maxRetries := 3
+    backoff := 100 * time.Millisecond
+    
+    for attempt := 0; attempt < maxRetries; attempt++ {
+        err := fn()
+        if err == nil {
+            return nil
+        }
+        
+        // Check if error is retryable
+        if !classifier(err) {
+            return err
+        }
+        
+        if attempt < maxRetries-1 {
+            select {
+            case <-time.After(backoff):
+                backoff *= 2
+            case <-ctx.Done():
+                return ctx.Err()
+            }
+        }
+    }
+    
+    return fmt.Errorf("max retries exceeded")
+}
+
+// Common error classifiers
+func IsRetryableError(err error) bool {
+    // Network errors
+    var netErr net.Error
+    if errors.As(err, &netErr) && netErr.Temporary() {
+        return true
+    }
+    
+    // Timeout errors
+    if errors.Is(err, context.DeadlineExceeded) {
+        return true
+    }
+    
+    // HTTP 5xx errors
+    var appErr *AppError
+    if errors.As(err, &appErr) {
+        return appErr.Type == ErrorTypeExternal || appErr.Type == ErrorTypeTimeout
+    }
+    
+    return false
+}
+```
+
+## User-Facing Error Messages
+
+Separate internal and user-facing errors:
+
+```go
+// Rule: Map internal errors to user-friendly messages
+type ErrorMapper struct {
+    mappings map[string]UserError
+}
+
+type UserError struct {
+    Title       string                 `json:"title"`
+    Message     string                 `json:"message"`
+    Action      string                 `json:"action,omitempty"`
+    Fields      map[string]string      `json:"fields,omitempty"`
+    Links       []Link                 `json:"links,omitempty"`
+}
+
+type Link struct {
+    Rel  string `json:"rel"`
+    Href string `json:"href"`
+}
+
+func NewErrorMapper() *ErrorMapper {
+    return &ErrorMapper{
+        mappings: map[string]UserError{
+            "PRODUCT_NOT_FOUND": {
+                Title:   "Product Not Found",
+                Message: "The product you're looking for doesn't exist or has been removed.",
+                Action:  "Please check the product ID or browse our catalog.",
+                Links: []Link{
+                    {Rel: "catalog", Href: "/api/v1/products"},
+                },
+            },
+            "UNAUTHORIZED": {
+                Title:   "Authentication Required",
+                Message: "You need to sign in to access this resource.",
+                Action:  "Please sign in with your credentials.",
+                Links: []Link{
+                    {Rel: "login", Href: "/auth/login"},
+                },
+            },
+            "RATE_LIMIT_EXCEEDED": {
+                Title:   "Too Many Requests",
+                Message: "You've made too many requests. Please slow down.",
+                Action:  "Wait a moment before trying again.",
+            },
+        },
+    }
+}
+
+func (m *ErrorMapper) MapError(err error) UserError {
+    var appErr *AppError
+    if !errors.As(err, &appErr) {
+        // Default error
+        return UserError{
+            Title:   "Something Went Wrong",
+            Message: "We encountered an unexpected error. Please try again later.",
+            Action:  "If the problem persists, please contact support.",
+        }
+    }
+    
+    // Look up user error
+    if userErr, ok := m.mappings[appErr.Code]; ok {
+        // Add dynamic fields if validation error
+        if appErr.Type == ErrorTypeValidation {
+            userErr.Fields = make(map[string]string)
+            for k, v := range appErr.Details {
+                userErr.Fields[k] = fmt.Sprintf("%v", v)
+            }
+        }
+        return userErr
+    }
+    
+    // Default by type
+    switch appErr.Type {
+    case ErrorTypeValidation:
+        return UserError{
+            Title:   "Invalid Input",
+            Message: appErr.Message,
+            Action:  "Please check your input and try again.",
+            Fields:  extractFieldErrors(appErr),
+        }
+    case ErrorTypeNotFound:
+        return UserError{
+            Title:   "Not Found",
+            Message: "The requested resource could not be found.",
+        }
+    default:
+        return UserError{
+            Title:   "Error",
+            Message: "An error occurred while processing your request.",
+        }
+    }
+}
+```
+
+## Error Logging and Monitoring
+
+Log errors with appropriate context:
+
+```go
+// Rule: Structured error logging
+type ErrorLogger struct {
+    logger *slog.Logger
+}
+
+func (el *ErrorLogger) LogError(ctx context.Context, err error, operation string) {
+    if err == nil {
+        return
+    }
+    
+    // Extract context
+    requestID := GetRequestID(ctx)
+    userID := GetUserID(ctx)
+    traceID := GetTraceID(ctx)
+    
+    // Determine log level
+    level := slog.LevelError
+    isUserError := false
+    
+    var appErr *AppError
+    if errors.As(err, &appErr) {
+        switch appErr.Type {
+        case ErrorTypeValidation, ErrorTypeNotFound:
+            level = slog.LevelWarn
+            isUserError = true
+        case ErrorTypeUnauthorized, ErrorTypeForbidden:
+            level = slog.LevelInfo
+            isUserError = true
+        }
+    }
+    
+    // Log with context
+    el.logger.LogAttrs(ctx, level, "error occurred",
+        slog.String("operation", operation),
+        slog.String("error", err.Error()),
+        slog.String("error_type", string(getErrorType(err))),
+        slog.String("request_id", requestID),
+        slog.String("user_id", userID),
+        slog.String("trace_id", traceID),
+        slog.Bool("user_error", isUserError),
+        slog.Any("details", getErrorDetails(err)),
+    )
+    
+    // Log stack trace for internal errors
+    if !isUserError && appErr != nil && appErr.StackTrace != "" {
+        el.logger.Debug("error stack trace",
+            slog.String("stack", appErr.StackTrace),
+        )
+    }
+}
+
+// Rule: Error metrics collection
+type ErrorMetrics struct {
+    errorCounter *prometheus.CounterVec
+    errorRate    *prometheus.GaugeVec
+}
+
+func NewErrorMetrics() *ErrorMetrics {
+    return &ErrorMetrics{
+        errorCounter: prometheus.NewCounterVec(
+            prometheus.CounterOpts{
+                Name: "errors_total",
+                Help: "Total number of errors",
+            },
+            []string{"type", "code", "operation"},
+        ),
+        errorRate: prometheus.NewGaugeVec(
+            prometheus.GaugeOpts{
+                Name: "error_rate",
+                Help: "Error rate per operation",
+            },
+            []string{"operation"},
+        ),
+    }
+}
+
+func (m *ErrorMetrics) RecordError(err error, operation string) {
+    errorType := "unknown"
+    errorCode := "unknown"
+    
+    var appErr *AppError
+    if errors.As(err, &appErr) {
+        errorType = string(appErr.Type)
+        errorCode = appErr.Code
+    }
+    
+    m.errorCounter.WithLabelValues(errorType, errorCode, operation).Inc()
+}
+```
+
+## Error Testing
+
+Test error handling comprehensively:
+
+```go
+// Rule: Test error scenarios
+func TestErrorHandling(t *testing.T) {
+    tests := []struct {
+        name          string
+        operation     func() error
+        expectedType  ErrorType
+        expectedCode  string
+        expectedMsg   string
+    }{
+        {
+            name: "validation error",
+            operation: func() error {
+                return NewError(ErrorTypeValidation, "INVALID_EMAIL").
+                    WithMessage("invalid email format").
+                    WithDetail("email", "not-an-email").
+                    Build()
+            },
+            expectedType: ErrorTypeValidation,
+            expectedCode: "INVALID_EMAIL",
+            expectedMsg:  "invalid email format",
+        },
+        {
+            name: "wrapped error",
+            operation: func() error {
+                original := errors.New("connection refused")
+                return WrapError(original, "database connection failed")
+            },
+            expectedType: ErrorTypeInternal,
+            expectedCode: "INTERNAL_ERROR",
+        },
+    }
+    
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            err := tt.operation()
+            
+            var appErr *AppError
+            assert.True(t, errors.As(err, &appErr))
+            assert.Equal(t, tt.expectedType, appErr.Type)
+            assert.Equal(t, tt.expectedCode, appErr.Code)
+            
+            if tt.expectedMsg != "" {
+                assert.Contains(t, appErr.Message, tt.expectedMsg)
+            }
+        })
+    }
+}
+```
+
+## Best Practices
+
+1. **Error Types**: Use specific error types for different scenarios
+2. **Context**: Always include relevant context in errors
+3. **Wrapping**: Wrap errors with additional context as they propagate
+4. **User Messages**: Separate internal errors from user-facing messages
+5. **Logging**: Log errors with appropriate levels and context
+6. **Metrics**: Track error rates and types
+7. **Recovery**: Implement appropriate recovery strategies
+8. **Testing**: Test error paths as thoroughly as success paths

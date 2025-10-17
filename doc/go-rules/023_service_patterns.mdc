@@ -1,0 +1,753 @@
+# Rule: Service-Specific Patterns
+
+Implement common patterns for building robust services in the Tall Affiliate architecture.
+
+## Worker Pattern
+
+Implement background workers for async processing:
+
+```go
+// Rule: Create configurable workers with graceful shutdown
+type Worker struct {
+    name          string
+    processor     MessageProcessor
+    concurrency   int
+    shutdownCh    chan struct{}
+    wg            sync.WaitGroup
+    logger        *slog.Logger
+    metrics       *WorkerMetrics
+    errorHandler  ErrorHandler
+}
+
+type MessageProcessor interface {
+    Process(ctx context.Context, msg Message) error
+}
+
+type ErrorHandler interface {
+    HandleError(ctx context.Context, msg Message, err error) error
+}
+
+// Rule: Implement worker lifecycle
+func (w *Worker) Start(ctx context.Context) error {
+    w.logger.Info("starting worker", "name", w.name, "concurrency", w.concurrency)
+    
+    for i := 0; i < w.concurrency; i++ {
+        w.wg.Add(1)
+        go w.run(ctx, i)
+    }
+    
+    return nil
+}
+
+func (w *Worker) run(ctx context.Context, workerID int) {
+    defer w.wg.Done()
+    
+    for {
+        select {
+        case <-ctx.Done():
+            w.logger.Info("worker stopping", "worker_id", workerID)
+            return
+        case <-w.shutdownCh:
+            w.logger.Info("worker shutdown signal received", "worker_id", workerID)
+            return
+        default:
+            if err := w.processNext(ctx, workerID); err != nil {
+                w.logger.Error("processing error", "error", err, "worker_id", workerID)
+            }
+        }
+    }
+}
+
+// Rule: Implement robust message processing
+func (w *Worker) processNext(ctx context.Context, workerID int) error {
+    msg, err := w.fetchMessage(ctx)
+    if err != nil {
+        if errors.Is(err, ErrNoMessages) {
+            // Back off when no messages
+            time.Sleep(1 * time.Second)
+            return nil
+        }
+        return fmt.Errorf("fetch message: %w", err)
+    }
+    
+    // Create processing context with timeout
+    processCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+    defer cancel()
+    
+    // Track metrics
+    start := time.Now()
+    w.metrics.MessagesStarted.Inc()
+    
+    // Process message
+    if err := w.processor.Process(processCtx, msg); err != nil {
+        w.metrics.MessagesFailed.Inc()
+        
+        // Handle error
+        if err := w.errorHandler.HandleError(ctx, msg, err); err != nil {
+            return fmt.Errorf("handle error: %w", err)
+        }
+        
+        return nil
+    }
+    
+    // Success metrics
+    w.metrics.MessagesCompleted.Inc()
+    w.metrics.ProcessingDuration.Record(time.Since(start).Seconds())
+    
+    return nil
+}
+
+// Rule: Graceful shutdown
+func (w *Worker) Shutdown(timeout time.Duration) error {
+    w.logger.Info("shutting down worker", "name", w.name)
+    
+    // Signal shutdown
+    close(w.shutdownCh)
+    
+    // Wait for workers with timeout
+    done := make(chan struct{})
+    go func() {
+        w.wg.Wait()
+        close(done)
+    }()
+    
+    select {
+    case <-done:
+        w.logger.Info("worker shutdown complete", "name", w.name)
+        return nil
+    case <-time.After(timeout):
+        return fmt.Errorf("shutdown timeout after %s", timeout)
+    }
+}
+```
+
+## Repository Pattern
+
+Implement data access with repository pattern:
+
+```go
+// Rule: Define repository interfaces
+type ProductRepository interface {
+    Get(ctx context.Context, id string) (*Product, error)
+    List(ctx context.Context, filter Filter, page Pagination) ([]*Product, int64, error)
+    Create(ctx context.Context, product *Product) error
+    Update(ctx context.Context, id string, updates map[string]interface{}) error
+    Delete(ctx context.Context, id string) error
+    
+    // Batch operations
+    BatchCreate(ctx context.Context, products []*Product) error
+    BatchUpdate(ctx context.Context, updates []BatchUpdate) error
+}
+
+// Rule: Implement with transaction support
+type productRepository struct {
+    db     *sql.DB
+    logger *slog.Logger
+}
+
+func (r *productRepository) Get(ctx context.Context, id string) (*Product, error) {
+    // Use prepared statement
+    query := `
+        SELECT id, asin, title, description, status, quality_score,
+               height_cm, length_cm, width_cm, created_at, updated_at
+        FROM products
+        WHERE id = $1
+    `
+    
+    var p Product
+    err := r.db.QueryRowContext(ctx, query, id).Scan(
+        &p.ID, &p.ASIN, &p.Title, &p.Description, &p.Status, &p.QualityScore,
+        &p.HeightCm, &p.LengthCm, &p.WidthCm, &p.CreatedAt, &p.UpdatedAt,
+    )
+    
+    if err == sql.ErrNoRows {
+        return nil, &NotFoundError{Resource: "product", ID: id}
+    }
+    if err != nil {
+        return nil, fmt.Errorf("query product: %w", err)
+    }
+    
+    return &p, nil
+}
+
+// Rule: Implement filtering and pagination
+func (r *productRepository) List(ctx context.Context, filter Filter, page Pagination) ([]*Product, int64, error) {
+    // Build query dynamically
+    query := sq.Select(
+        "id", "asin", "title", "description", "status", "quality_score",
+        "height_cm", "length_cm", "width_cm", "created_at", "updated_at",
+    ).From("products")
+    
+    // Apply filters
+    if filter.Status != "" {
+        query = query.Where(sq.Eq{"status": filter.Status})
+    }
+    if filter.MinQualityScore > 0 {
+        query = query.Where(sq.GtOrEq{"quality_score": filter.MinQualityScore})
+    }
+    if filter.Category != "" {
+        query = query.Where(sq.Eq{"category": filter.Category})
+    }
+    
+    // Count total
+    countQuery, _, _ := query.ToSql()
+    var total int64
+    err := r.db.QueryRowContext(ctx, 
+        fmt.Sprintf("SELECT COUNT(*) FROM (%s) t", countQuery),
+    ).Scan(&total)
+    if err != nil {
+        return nil, 0, fmt.Errorf("count products: %w", err)
+    }
+    
+    // Apply pagination
+    query = query.
+        OrderBy(page.OrderBy).
+        Limit(uint64(page.Limit)).
+        Offset(uint64(page.Offset))
+    
+    // Execute query
+    sql, args, err := query.ToSql()
+    if err != nil {
+        return nil, 0, fmt.Errorf("build query: %w", err)
+    }
+    
+    rows, err := r.db.QueryContext(ctx, sql, args...)
+    if err != nil {
+        return nil, 0, fmt.Errorf("query products: %w", err)
+    }
+    defer rows.Close()
+    
+    var products []*Product
+    for rows.Next() {
+        var p Product
+        err := rows.Scan(
+            &p.ID, &p.ASIN, &p.Title, &p.Description, &p.Status, &p.QualityScore,
+            &p.HeightCm, &p.LengthCm, &p.WidthCm, &p.CreatedAt, &p.UpdatedAt,
+        )
+        if err != nil {
+            return nil, 0, fmt.Errorf("scan product: %w", err)
+        }
+        products = append(products, &p)
+    }
+    
+    return products, total, rows.Err()
+}
+
+// Rule: Use transactions for consistency
+func (r *productRepository) Update(ctx context.Context, id string, updates map[string]interface{}) error {
+    tx, err := r.db.BeginTx(ctx, nil)
+    if err != nil {
+        return fmt.Errorf("begin transaction: %w", err)
+    }
+    defer tx.Rollback()
+    
+    // Build update query
+    query := sq.Update("products").
+        SetMap(updates).
+        Set("updated_at", time.Now()).
+        Where(sq.Eq{"id": id})
+    
+    sql, args, err := query.ToSql()
+    if err != nil {
+        return fmt.Errorf("build update query: %w", err)
+    }
+    
+    result, err := tx.ExecContext(ctx, sql, args...)
+    if err != nil {
+        return fmt.Errorf("update product: %w", err)
+    }
+    
+    rowsAffected, err := result.RowsAffected()
+    if err != nil {
+        return fmt.Errorf("rows affected: %w", err)
+    }
+    
+    if rowsAffected == 0 {
+        return &NotFoundError{Resource: "product", ID: id}
+    }
+    
+    return tx.Commit()
+}
+```
+
+## Service Layer Pattern
+
+Implement business logic in service layer:
+
+```go
+// Rule: Separate business logic from data access
+type ProductService struct {
+    repo         ProductRepository
+    cache        CacheInterface
+    eventBus     EventBus
+    enricher     ProductEnricher
+    validator    ProductValidator
+    logger       *slog.Logger
+}
+
+// Rule: Implement complex business operations
+func (s *ProductService) CreateProduct(ctx context.Context, input CreateProductInput) (*Product, error) {
+    // Validate input
+    if err := s.validator.ValidateCreateInput(input); err != nil {
+        return nil, fmt.Errorf("validation failed: %w", err)
+    }
+    
+    // Check for duplicates
+    existing, err := s.repo.GetByASIN(ctx, input.ASIN)
+    if err != nil && !errors.Is(err, ErrNotFound) {
+        return nil, fmt.Errorf("check existing: %w", err)
+    }
+    if existing != nil {
+        return nil, &ConflictError{Resource: "product", Field: "asin"}
+    }
+    
+    // Create product
+    product := &Product{
+        ID:          generateID(),
+        ASIN:        input.ASIN,
+        Title:       input.Title,
+        Description: input.Description,
+        Status:      StatusPending,
+        CreatedAt:   time.Now(),
+        UpdatedAt:   time.Now(),
+    }
+    
+    // Enrich with external data
+    enriched, err := s.enricher.Enrich(ctx, product)
+    if err != nil {
+        s.logger.Warn("enrichment failed", "error", err, "asin", product.ASIN)
+        // Continue with unenriched data
+    } else {
+        product = enriched
+    }
+    
+    // Calculate quality score
+    product.QualityScore = s.validator.CalculateQualityScore(product)
+    
+    // Save to database
+    if err := s.repo.Create(ctx, product); err != nil {
+        return nil, fmt.Errorf("create product: %w", err)
+    }
+    
+    // Publish event
+    event := NewProductCreatedEvent(product)
+    if err := s.eventBus.Publish(ctx, event); err != nil {
+        s.logger.Error("failed to publish event", "error", err)
+        // Don't fail the operation
+    }
+    
+    // Cache the product
+    s.cacheProduct(ctx, product)
+    
+    return product, nil
+}
+
+// Rule: Implement caching strategy
+func (s *ProductService) GetProduct(ctx context.Context, id string) (*Product, error) {
+    // Check cache first
+    cacheKey := fmt.Sprintf("product:%s", id)
+    
+    var product Product
+    found, err := s.cache.Get(ctx, cacheKey, &product)
+    if err != nil {
+        s.logger.Warn("cache error", "error", err)
+    }
+    if found {
+        return &product, nil
+    }
+    
+    // Load from database
+    p, err := s.repo.Get(ctx, id)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Update cache
+    s.cacheProduct(ctx, p)
+    
+    return p, nil
+}
+
+// Rule: Implement batch operations efficiently
+func (s *ProductService) ImportProducts(ctx context.Context, products []ImportProduct) error {
+    // Validate all products first
+    var validProducts []*Product
+    var errors []error
+    
+    for i, p := range products {
+        if err := s.validator.ValidateImport(p); err != nil {
+            errors = append(errors, fmt.Errorf("product %d: %w", i, err))
+            continue
+        }
+        
+        validProducts = append(validProducts, &Product{
+            ID:          generateID(),
+            ASIN:        p.ASIN,
+            Title:       p.Title,
+            Description: p.Description,
+            // ... other fields
+        })
+    }
+    
+    if len(errors) > 0 {
+        return &ValidationError{Errors: errors}
+    }
+    
+    // Batch insert with chunks
+    const chunkSize = 100
+    for i := 0; i < len(validProducts); i += chunkSize {
+        end := i + chunkSize
+        if end > len(validProducts) {
+            end = len(validProducts)
+        }
+        
+        chunk := validProducts[i:end]
+        if err := s.repo.BatchCreate(ctx, chunk); err != nil {
+            return fmt.Errorf("batch create chunk %d: %w", i/chunkSize, err)
+        }
+        
+        // Publish events for chunk
+        for _, product := range chunk {
+            event := NewProductCreatedEvent(product)
+            s.eventBus.PublishAsync(ctx, event)
+        }
+    }
+    
+    return nil
+}
+```
+
+## Event Sourcing Pattern
+
+Implement event sourcing for audit and replay:
+
+```go
+// Rule: Define event store interface
+type EventStore interface {
+    Append(ctx context.Context, streamID string, events []Event) error
+    Load(ctx context.Context, streamID string, fromVersion int) ([]Event, error)
+    LoadSnapshot(ctx context.Context, streamID string) (*Snapshot, error)
+    SaveSnapshot(ctx context.Context, snapshot *Snapshot) error
+}
+
+// Rule: Implement aggregate with event sourcing
+type ProductAggregate struct {
+    ID           string
+    Version      int
+    Product      *Product
+    uncommitted  []Event
+}
+
+func (a *ProductAggregate) Apply(event Event) error {
+    switch e := event.(type) {
+    case *ProductCreatedEvent:
+        a.Product = &Product{
+            ID:          e.ProductID,
+            ASIN:        e.ASIN,
+            Title:       e.Title,
+            Description: e.Description,
+            Status:      StatusPending,
+            CreatedAt:   e.Timestamp,
+        }
+        
+    case *ProductUpdatedEvent:
+        if a.Product == nil {
+            return fmt.Errorf("product not initialized")
+        }
+        // Apply updates
+        for field, value := range e.Updates {
+            switch field {
+            case "title":
+                a.Product.Title = value.(string)
+            case "description":
+                a.Product.Description = value.(string)
+            case "status":
+                a.Product.Status = value.(string)
+            }
+        }
+        a.Product.UpdatedAt = e.Timestamp
+        
+    case *ProductEnrichedEvent:
+        if a.Product == nil {
+            return fmt.Errorf("product not initialized")
+        }
+        a.Product.HeightCm = e.HeightCm
+        a.Product.LengthCm = e.LengthCm
+        a.Product.WidthCm = e.WidthCm
+        a.Product.QualityScore = e.QualityScore
+    }
+    
+    a.Version++
+    return nil
+}
+
+// Rule: Command handlers record events
+func (a *ProductAggregate) Update(updates map[string]interface{}) error {
+    // Validate state
+    if a.Product == nil {
+        return fmt.Errorf("product not found")
+    }
+    
+    // Create event
+    event := &ProductUpdatedEvent{
+        BaseEvent: BaseEvent{
+            ID:        generateEventID(),
+            Type:      "ProductUpdated",
+            Timestamp: time.Now(),
+        },
+        ProductID: a.ID,
+        Updates:   updates,
+    }
+    
+    // Apply to current state
+    if err := a.Apply(event); err != nil {
+        return err
+    }
+    
+    // Add to uncommitted events
+    a.uncommitted = append(a.uncommitted, event)
+    
+    return nil
+}
+
+// Rule: Load aggregate from event store
+func LoadProductAggregate(ctx context.Context, store EventStore, productID string) (*ProductAggregate, error) {
+    aggregate := &ProductAggregate{
+        ID:      productID,
+        Version: 0,
+    }
+    
+    // Try to load from snapshot
+    snapshot, err := store.LoadSnapshot(ctx, productID)
+    if err == nil && snapshot != nil {
+        aggregate.Product = snapshot.Data.(*Product)
+        aggregate.Version = snapshot.Version
+    }
+    
+    // Load events after snapshot
+    events, err := store.Load(ctx, productID, aggregate.Version)
+    if err != nil {
+        return nil, fmt.Errorf("load events: %w", err)
+    }
+    
+    // Apply events
+    for _, event := range events {
+        if err := aggregate.Apply(event); err != nil {
+            return nil, fmt.Errorf("apply event: %w", err)
+        }
+    }
+    
+    return aggregate, nil
+}
+```
+
+## Saga Pattern
+
+Implement distributed transactions with sagas:
+
+```go
+// Rule: Define saga orchestrator
+type OrderSaga struct {
+    orderService    OrderService
+    inventoryService InventoryService
+    paymentService  PaymentService
+    shippingService ShippingService
+    logger          *slog.Logger
+}
+
+type SagaStep struct {
+    Name        string
+    Execute     func(ctx context.Context, data interface{}) (interface{}, error)
+    Compensate  func(ctx context.Context, data interface{}) error
+}
+
+// Rule: Implement saga execution with compensation
+func (s *OrderSaga) ProcessOrder(ctx context.Context, order *Order) error {
+    sagaID := generateSagaID()
+    s.logger.Info("starting order saga", "saga_id", sagaID, "order_id", order.ID)
+    
+    steps := []SagaStep{
+        {
+            Name: "reserve_inventory",
+            Execute: func(ctx context.Context, data interface{}) (interface{}, error) {
+                return s.inventoryService.Reserve(ctx, order.Items)
+            },
+            Compensate: func(ctx context.Context, data interface{}) error {
+                reservation := data.(*InventoryReservation)
+                return s.inventoryService.CancelReservation(ctx, reservation.ID)
+            },
+        },
+        {
+            Name: "process_payment",
+            Execute: func(ctx context.Context, data interface{}) (interface{}, error) {
+                return s.paymentService.Charge(ctx, order.PaymentInfo, order.Total)
+            },
+            Compensate: func(ctx context.Context, data interface{}) error {
+                payment := data.(*Payment)
+                return s.paymentService.Refund(ctx, payment.ID)
+            },
+        },
+        {
+            Name: "create_shipment",
+            Execute: func(ctx context.Context, data interface{}) (interface{}, error) {
+                return s.shippingService.CreateShipment(ctx, order)
+            },
+            Compensate: func(ctx context.Context, data interface{}) error {
+                shipment := data.(*Shipment)
+                return s.shippingService.CancelShipment(ctx, shipment.ID)
+            },
+        },
+    }
+    
+    // Execute steps
+    var executedSteps []struct{
+        step   SagaStep
+        result interface{}
+    }
+    
+    for _, step := range steps {
+        s.logger.Info("executing saga step", "step", step.Name)
+        
+        result, err := step.Execute(ctx, order)
+        if err != nil {
+            s.logger.Error("saga step failed", "step", step.Name, "error", err)
+            
+            // Compensate in reverse order
+            for i := len(executedSteps) - 1; i >= 0; i-- {
+                executed := executedSteps[i]
+                s.logger.Info("compensating saga step", "step", executed.step.Name)
+                
+                if err := executed.step.Compensate(ctx, executed.result); err != nil {
+                    s.logger.Error("compensation failed", 
+                        "step", executed.step.Name, 
+                        "error", err,
+                    )
+                }
+            }
+            
+            return fmt.Errorf("saga failed at step %s: %w", step.Name, err)
+        }
+        
+        executedSteps = append(executedSteps, struct{
+            step   SagaStep
+            result interface{}
+        }{step, result})
+    }
+    
+    s.logger.Info("order saga completed", "saga_id", sagaID, "order_id", order.ID)
+    return nil
+}
+```
+
+## Circuit Breaker Pattern
+
+Implement circuit breaker for external services:
+
+```go
+// Rule: Implement circuit breaker with states
+type CircuitBreaker struct {
+    name            string
+    maxFailures     int
+    resetTimeout    time.Duration
+    halfOpenCalls   int
+    
+    mu              sync.RWMutex
+    state           State
+    failures        int
+    lastFailureTime time.Time
+    successCount    int
+}
+
+type State int
+
+const (
+    StateClosed State = iota
+    StateOpen
+    StateHalfOpen
+)
+
+// Rule: Execute with circuit breaker protection
+func (cb *CircuitBreaker) Execute(fn func() error) error {
+    cb.mu.Lock()
+    state := cb.state
+    cb.mu.Unlock()
+    
+    if state == StateOpen {
+        if time.Since(cb.lastFailureTime) > cb.resetTimeout {
+            cb.mu.Lock()
+            cb.state = StateHalfOpen
+            cb.successCount = 0
+            cb.mu.Unlock()
+        } else {
+            return &CircuitOpenError{Name: cb.name}
+        }
+    }
+    
+    err := fn()
+    
+    cb.mu.Lock()
+    defer cb.mu.Unlock()
+    
+    if err != nil {
+        cb.failures++
+        cb.lastFailureTime = time.Now()
+        
+        if cb.failures >= cb.maxFailures {
+            cb.state = StateOpen
+        }
+        
+        return err
+    }
+    
+    // Success
+    if cb.state == StateHalfOpen {
+        cb.successCount++
+        if cb.successCount >= cb.halfOpenCalls {
+            cb.state = StateClosed
+            cb.failures = 0
+        }
+    } else {
+        cb.failures = 0
+    }
+    
+    return nil
+}
+
+// Rule: Wrap external service calls
+type ResilientClient struct {
+    client         HTTPClient
+    circuitBreaker *CircuitBreaker
+    logger         *slog.Logger
+}
+
+func (c *ResilientClient) Get(ctx context.Context, url string) ([]byte, error) {
+    var result []byte
+    var err error
+    
+    cbErr := c.circuitBreaker.Execute(func() error {
+        result, err = c.client.Get(ctx, url)
+        return err
+    })
+    
+    if cbErr != nil {
+        var cbOpenErr *CircuitOpenError
+        if errors.As(cbErr, &cbOpenErr) {
+            c.logger.Warn("circuit breaker open", "service", cbOpenErr.Name)
+            return nil, cbErr
+        }
+    }
+    
+    return result, err
+}
+```
+
+## Best Practices
+
+1. **Worker Pattern**: Use for async processing with proper lifecycle management
+2. **Repository Pattern**: Separate data access from business logic
+3. **Service Layer**: Keep business logic in services, not controllers
+4. **Event Sourcing**: Use for audit trails and complex state management
+5. **Saga Pattern**: Handle distributed transactions with compensation
+6. **Circuit Breaker**: Protect against cascading failures
+7. **Dependency Injection**: Pass dependencies explicitly
+8. **Testing**: Mock interfaces for unit testing, use real implementations for integration tests

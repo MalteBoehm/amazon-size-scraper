@@ -1,0 +1,73 @@
+---
+description: 
+globs: **/handlers/*.go,**/handler/*.go,**/routes/*.g
+alwaysApply: false
+---
+
+---
+description: Richtlinien für Web-Handler und Routing in Go
+globs: **/handlers/*.go,**/handler/*.go,**/routes/*.go
+alwaysApply: false
+---
+
+# API Handlers and HTTP
+
+## Routing
+
+- Prefer high-performance third-party routers like `julienschmidt/httprouter` for APIs over the standard library's `http.ServeMux` due to better handling of route parameters, method-based routing, automatic OPTIONS handling, and customizable `NotFound`/`MethodNotAllowed` handlers.
+- Isolate route definitions into a dedicated `routes()` method on the `application` struct. This method should return an `http.Handler`.
+- Register handlers using router-specific methods (e.g., `router.HandlerFunc(http.MethodGet, "/path", app.handler)`).
+- Use standard HTTP method constants (`http.MethodGet`, `http.MethodPost`, etc.).
+- Define RESTful URL patterns (e.g., `/v1/movies`, `/v1/movies/:id`).
+- Use named URL parameters (e.g., `:id`) and retrieve values using router-specific helpers (`httprouter.ParamsFromContext(r.Context()).ByName("id")`).
+- Create helper methods (e.g., `app.readIDParam()`) to encapsulate common parameter reading and validation logic. Validate parameter types and ranges (e.g., ID > 0).
+- Configure custom `NotFound` and `MethodNotAllowed` handlers on the router instance, pointing them to custom JSON error response helpers (e.g., `router.NotFound = http.HandlerFunc(app.notFoundResponse)`).
+
+## Error Handling
+
+- Create centralized helper methods (`serverErrorResponse`, `notFoundResponse`, `methodNotAllowedResponse`, `failedValidationResponse`, `invalidCredentialsResponse`, `invalidAuthenticationTokenResponse`, `authenticationRequiredResponse`, `inactiveAccountResponse`, `notPermittedResponse`, `editConflictResponse`, `rateLimitExceededResponse`) on the `application` struct for sending standard JSON error responses with appropriate status codes (500, 404, 405, 422, 401, 403, 409, 429).
+- Log detailed errors server-side using the structured logger within error helpers (`app.logError()`).
+- Return user-friendly, consistent JSON error messages to the client, typically under an `"error"` key (e.g., `{"error": "message"}` or `{"error": {"field": "message"}}` for validation).
+- Use `errors.Is()` to check for specific sentinel errors (e.g., `data.ErrRecordNotFound`, `data.ErrEditConflict`, `data.ErrDuplicateEmail`, `context.Canceled`, `context.DeadlineExceeded`).
+- Use `errors.As()` to check if an error matches a specific type (e.g., `*json.SyntaxError`, `*json.UnmarshalTypeError`, `*http.MaxBytesError`).
+
+## Middleware
+
+- Implement middleware as methods on `*application` returning `func(http.Handler) http.Handler`.
+- Use the pattern `return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { ... next.ServeHTTP(w, r) })`.
+- Chain middleware by wrapping: `app.recoverPanic(app.rateLimit(app.authenticate(router)))`. Order matters.
+- Implement middleware for:
+    - Panic recovery (`recoverPanic`): Use `defer` and `recover()`. Should be one of the outermost middleware. Send a 500 JSON error response. Set `Connection: close` header.
+    - Rate limiting (`rateLimit`): Implement IP-based limiting using `x/time/rate` and `sync.Mutex`. Place after panic recovery.
+    - Authentication (`authenticate`): Check `Authorization: Bearer <token>`, validate token, fetch user, add user (or anonymous user) to request context. Place after rate limiting.
+    - CORS (`enableCORS`): Set CORS headers (`Access-Control-Allow-Origin`, `Vary: Origin`, handle preflight OPTIONS requests). Place early, potentially before rate limiting, to ensure preflight responses aren't blocked.
+    - Authorization (`requireAuthenticatedUser`, `requireActivatedUser`, `requirePermission`): Check user status/permissions from request context. Place after `authenticate`.
+    - Metrics (`metrics`): Record request/response counts and timings. Place as the outermost middleware.
+- Use `http.HandlerFunc` adapters where middleware needs to wrap specific handler functions directly (e.g., `app.requirePermission("code", app.handler)`).
+- Set `Vary: Authorization` header if authentication influences the response. Set `Vary: Origin` if CORS origin checking influences the response.
+
+## Request/Response Helpers
+
+- Create helper methods on `*application` for common tasks:
+    - `readIDParam()`: Reads and validates `:id` URL parameter.
+    - `writeJSON()`: Encodes data to JSON (using `json.MarshalIndent`), sets `Content-Type: application/json`, writes status code and body. Handles potential encoding errors. Accepts headers map.
+    - `readJSON()`: Decodes JSON request body, handles various error types (syntax, type mismatch, EOF, unknown fields, body size limits), provides user-friendly error messages. Use `http.MaxBytesReader`, `json.Decoder`, `DisallowUnknownFields()`, check for trailing data.
+    - `readString()`, `readCSV()`, `readInt()`: Helpers for parsing query string parameters with defaults and validation integrated with the `validator` package.
+    - `background()`: Executes a function in a background goroutine with panic recovery and WaitGroup integration.
+    - `contextSetUser()`, `contextGetUser()`: Type-safe helpers for adding/retrieving user data from request context using a custom context key type.
+
+## Validation
+
+- Create a reusable `internal/validator` package.
+- Define a `Validator` struct containing an `Errors map[string]string`.
+- Implement methods like `Valid()`, `AddError()`, `Check()`.
+- Implement generic helpers like `PermittedValue()`, `Matches()`, `Unique()`. Define constants like `EmailRX`.
+- Create model-specific validation functions (e.g., `data.ValidateMovie()`, `data.ValidateUser()`, `data.ValidateFilters()`, `data.ValidateTokenPlaintext()`) that accept a `*validator.Validator` and the data struct.
+- In handlers, create a `validator.New()`, call relevant validation functions, and check `!v.Valid()`. If invalid, call `app.failedValidationResponse(w, r, v.Errors)`.
+- Use HTTP status code 422 (`http.StatusUnprocessableEntity`) for validation errors.
+
+## Partial Updates
+
+- Use pointers (`*string`, `*int32`, `*data.Runtime`) in input structs for fields that support partial updates.
+- Check if a field in the input struct is `nil`. If not `nil`, dereference the pointer (`*input.FieldName`) and update the corresponding field in the model struct.
+- Use the `PATCH` HTTP method for partial updates, reserving `PUT` for complete resource replacement.

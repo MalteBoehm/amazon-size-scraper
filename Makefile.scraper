@@ -1,0 +1,88 @@
+.PHONY: help build run test docker-build docker-up docker-down migrate-up migrate-down
+
+# Default target
+help:
+	@echo "Amazon Scraper Service - Available targets:"
+	@echo "  build         - Build the Amazon Scraper service"
+	@echo "  run           - Run the service locally"
+	@echo "  test          - Run tests"
+	@echo "  docker-build  - Build Docker image"
+	@echo "  docker-up     - Start all services with Docker Compose"
+	@echo "  docker-down   - Stop all services"
+	@echo "  migrate-up    - Run database migrations"
+	@echo "  migrate-down  - Rollback database migrations"
+	@echo "  install-playwright - Install Playwright browsers"
+
+# Build the service
+build:
+	go build -o bin/amazon-scraper ./cmd/amazon-scraper
+
+# Run locally
+run: build
+	./bin/amazon-scraper
+
+# Run tests
+test:
+	go test -v ./internal/amazon-scraper/...
+
+# Run tests with coverage
+test-coverage:
+	go test -v -coverprofile=coverage.out ./internal/amazon-scraper/...
+	go tool cover -html=coverage.out -o coverage.html
+
+# Docker commands
+docker-build:
+	docker build -f Dockerfile.scraper -t amazon-scraper:latest .
+
+docker-up:
+	docker-compose up -d
+
+docker-down:
+	docker-compose down
+
+docker-logs:
+	docker-compose logs -f amazon-scraper
+
+# Database migrations
+migrate-up:
+	migrate -path migrations -database "postgres://postgres:postgres@localhost:5433/tall_affiliate?sslmode=disable" up
+
+migrate-down:
+	migrate -path migrations -database "postgres://postgres:postgres@localhost:5433/tall_affiliate?sslmode=disable" down
+
+# Install Playwright
+install-playwright:
+	go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps
+
+# Development helpers
+dev:
+	air -c .air.toml
+
+fmt:
+	go fmt ./...
+
+lint:
+	golangci-lint run
+
+# API testing
+test-size-chart:
+	@echo "Testing size chart endpoint..."
+	@curl -X POST http://localhost:8084/api/v1/scraper/size-chart \
+		-H "Content-Type: application/json" \
+		-d '{"asin":"B07ZRD89XF"}' | jq
+
+test-reviews:
+	@echo "Testing reviews endpoint..."
+	@curl -X POST http://localhost:8084/api/v1/scraper/reviews \
+		-H "Content-Type: application/json" \
+		-d '{"asin":"B07ZRD89XF"}' | jq
+
+test-create-job:
+	@echo "Creating test job..."
+	@curl -X POST http://localhost:8084/api/v1/scraper/jobs \
+		-H "Content-Type: application/json" \
+		-d '{"search_query":"t-shirt größentabelle länge","category":"fashion","max_pages":2}' | jq
+
+test-stats:
+	@echo "Getting stats..."
+	@curl http://localhost:8084/api/v1/stats | jq

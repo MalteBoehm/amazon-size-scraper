@@ -1,0 +1,47 @@
+---
+description: 
+globs: **/cmd/api/middleware.go,**/cmd/api/main.go,**/cmd/api/routes.go
+alwaysApply: false
+---
+# Cross-Ori---
+description: Richtlinien für die Konfiguration von Cross-Origin Resource Sharing (CORS) in Go APIs
+globs:
+  - "**/cmd/api/middleware.go"
+  - "**/cmd/api/main.go" # For configuration
+  - "**/cmd/api/routes.go" # Where middleware is applied
+alwaysApply: false
+---gin Resource Sharing (CORS)
+
+- Understand the Same-Origin Policy (SOP): Browsers restrict webpages from making requests to a different origin (scheme, host, port) than the one that served the webpage, primarily preventing reading the response.
+- Use CORS headers on API responses to selectively relax the SOP.
+- Implement CORS handling in middleware (`enableCORS`). Place this middleware early in the chain (e.g., after panic recovery, before rate limiting) to ensure CORS headers are added even to error responses like 429.
+- **Simple Requests:**
+    - For requests meeting "simple" criteria (GET/HEAD/POST, specific safe headers, specific Content-Types), the browser sends the request with an `Origin` header.
+    - To allow the request, the API response must include `Access-Control-Allow-Origin: <requesting_origin>` or `Access-Control-Allow-Origin: *`.
+    - Always include `Vary: Origin` in the response if the `Access-Control-Allow-Origin` header might vary based on the request's `Origin`.
+- **Preflight Requests:**
+    - For requests that are *not* simple (e.g., PUT/PATCH/DELETE methods, custom headers like `Authorization`, `Content-Type: application/json`), the browser first sends a preflight `OPTIONS` request to the same URL.
+    - The preflight request includes `Origin`, `Access-Control-Request-Method`, and potentially `Access-Control-Request-Headers`.
+    - The API must respond to the `OPTIONS` request with a `200 OK` status (use 200, not 204, for wider browser compatibility).
+    - The preflight response *must* include:
+        - `Access-Control-Allow-Origin: <requesting_origin>` (matching the preflight request's Origin).
+        - `Access-Control-Allow-Methods`: Listing the allowed methods for the actual request (e.g., "OPTIONS, PUT, PATCH, DELETE"). CORS-safe methods (GET, HEAD, POST) are not strictly required but can be included.
+        - `Access-Control-Allow-Headers`: Listing the allowed headers for the actual request (e.g., "Authorization, Content-Type"). CORS-safe headers and forbidden headers don't need to be listed.
+    - Optionally include `Access-Control-Max-Age: <seconds>` to allow the browser to cache the preflight response.
+- **Implementation:**
+    - Configure a list of trusted origins via a command-line flag (`-cors-trusted-origins`) parsed into `config.cors.trustedOrigins []string`.
+    - In `enableCORS` middleware:
+        - Add `Vary: Origin` and `Vary: Access-Control-Request-Method` headers to all responses.
+        - Get the request `Origin` header.
+        - If `Origin` is not empty, iterate through `app.config.cors.trustedOrigins`.
+        - If a match is found:
+            - Set `Access-Control-Allow-Origin` to the matched origin value.
+            - Check if it's a preflight request (Method is OPTIONS AND `Access-Control-Request-Method` header exists).
+            - If preflight: Set `Access-Control-Allow-Methods` and `Access-Control-Allow-Headers` with the appropriate allowed values for your API. Send `200 OK` and return immediately (don't call `next.ServeHTTP`).
+            - If not preflight (or no origin match was found after the loop), break the loop (if matched) and proceed to call `next.ServeHTTP()`.
+- **Security Considerations:**
+    - Never trust `Origin: null`.
+    - Avoid using `Access-Control-Allow-Origin: *` if the API handles credentials (cookies or basic auth).
+    - If using `Access-Control-Allow-Credentials: true`, the `Access-Control-Allow-Origin` *must* be a specific origin, not `*`.
+    - Be cautious with partial origin matching (e.g., suffix matching); prefer exact matching against a safelist.
+    - If allowing `Authorization` header via CORS, ensure origin checks are strict to prevent token leakage/abuse.

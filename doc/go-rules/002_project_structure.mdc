@@ -1,0 +1,37 @@
+---
+description: 
+globs: **/*.go
+alwaysApply: false
+---
+---
+description: Projektstruktur-Richtlinien für Go-Webanwendungen
+globs: **/*.go
+alwaysApply: true
+---
+
+# Project Structure
+
+- Organize project using standard Go layout:
+    - `cmd/api/`: Main application code for the API (main.go, handlers.go, routes.go, middleware.go, helpers.go, context.go, server.go).
+    - `cmd/examples/`: Optional directory for small example applications (like CORS demonstrators).
+    - `internal/`: Non-reusable application code.
+        - `internal/data/`: Database models (e.g., models.go, movies.go, users.go, tokens.go, permissions.go, filters.go), validation logic tied to models.
+        - `internal/validator/`: Generic validation helpers (validator.go).
+        - `internal/mailer/`: Email sending logic and templates (mailer.go, templates/).
+        - `internal/vcs/`: Version control helpers (vcs.go).
+    - `migrations/`: SQL migration files (`*.up.sql`, `*.down.sql`).
+    - `remote/`: Scripts and configuration files for deployment.
+        - `remote/setup/`: Server setup scripts (e.g., 01.sh).
+        - `remote/production/`: Production configuration files (e.g., api.service, Caddyfile).
+    - `ui/`: UI assets (only if serving HTML directly, less common for pure APIs).
+    - `vendor/`: Vendored third-party dependencies (managed by `go mod vendor`).
+- Keep the project root clean: `go.mod`, `go.sum`, `Makefile`, `.gitignore`, `.envrc` (optional, gitignored), `README.md`.
+- Use the `internal` directory for packages not intended for external use by other projects.
+- Place API application specific code under `cmd/api/`.
+
+## File Embedding
+
+- Use the `embed` package to embed assets like email templates directly into the binary.
+- Use the `//go:embed <path>` directive above a global `embed.FS` variable (e.g., in `internal/mailer/mailer.go` for templates).
+- Paths in `go:embed` are relative to the source file containing the directive.
+- Use `template.ParseFS()` to parse embedded templates from the `embed.FS`.
