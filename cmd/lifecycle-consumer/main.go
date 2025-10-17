@@ -17,6 +17,50 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// Event struct matches tall-affiliate-common Event structure
+type Event struct {
+	ID            string         `json:"id"`
+	Type          string         `json:"type"`
+	AggregateType string         `json:"aggregate_type"`
+	AggregateID   string         `json:"aggregate_id"`
+	Payload       any            `json:"payload"`
+	Timestamp     time.Time      `json:"timestamp"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+}
+
+// ProductCreatedPayload matches tall-affiliate-common ProductCreatedPayload
+type ProductCreatedPayload struct {
+	ASIN           string   `json:"asin"`
+	Title          string   `json:"title"`
+	Brand          string   `json:"brand,omitempty"`
+	Category       string   `json:"category,omitempty"`
+	Gender         string   `json:"gender,omitempty"`
+	CurrentPrice   float64  `json:"current_price,omitempty"`
+	Currency       string   `json:"currency,omitempty"`
+	DetailPageURL  string   `json:"detail_page_url,omitempty"`
+	ImageUrls      []string `json:"image_urls,omitempty"`
+	Features       []string `json:"features,omitempty"`
+	BrowseNodeID   string   `json:"browse_node_id,omitempty"`
+	BrowseNodeTags []string `json:"browse_node_tags,omitempty"`
+}
+
+// Event constants from tall-affiliate-common
+const (
+	EVENT_02A_PRODUCT_VALIDATED = "02A_PRODUCT_VALIDATED"
+)
+
+// ParsePayload matches tall-affiliate-common helper function
+func ParsePayload(payload interface{}, target interface{}) error {
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+	if err := json.Unmarshal(jsonData, target); err != nil {
+		return fmt.Errorf("failed to unmarshal payload: %w", err)
+	}
+	return nil
+}
+
 func main() {
 	// Setup logger
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -154,167 +198,103 @@ func (c *Consumer) Run(ctx context.Context) error {
 }
 
 func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error {
-	// Debug: Log all keys and values
-	keys := make([]string, 0, len(msg.Values))
-	for k := range msg.Values {
-		keys = append(keys, k)
+	// Parse the event using tall-affiliate-common structure
+	var event Event
+
+	// Method 1: Try to unmarshal the entire message as a single event JSON
+	eventJSON, err := json.Marshal(msg.Values)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message values: %w", err)
 	}
-	c.logger.Info("DEBUG: Processing message",
+
+	if err := json.Unmarshal(eventJSON, &event); err != nil {
+		// Method 2: Try to find individual fields and build event manually
+		event.Type, _ = msg.Values["type"].(string)
+		event.AggregateID, _ = msg.Values["aggregate_id"].(string)
+		event.AggregateType, _ = msg.Values["aggregate_type"].(string)
+		event.Payload = msg.Values["payload"]
+
+		// Parse timestamp if available
+		if timestampStr, ok := msg.Values["timestamp"].(string); ok {
+			if timestamp, err := time.Parse(time.RFC3339, timestampStr); err == nil {
+				event.Timestamp = timestamp
+			}
+		}
+	}
+
+	// Check if this is a product event we should process
+	if event.Type != EVENT_02A_PRODUCT_VALIDATED {
+		c.logger.Info("Skipping non-product event",
+			"event_type", event.Type,
+			"aggregate_id", event.AggregateID,
+		)
+		return nil
+	}
+
+	// Get ASIN from aggregate_id (standard tall-affiliate-common pattern)
+	asin := event.AggregateID
+	if asin == "" {
+		// Fallback: try to parse ASIN from payload
+		var payload ProductCreatedPayload
+		if err := ParsePayload(event.Payload, &payload); err == nil {
+			asin = payload.ASIN
+		}
+	}
+
+	if asin == "" {
+		return fmt.Errorf("missing ASIN in event (aggregate_id or payload)")
+	}
+
+	c.logger.Info("Processing validated product",
 		"message_id", msg.ID,
-		"keys", keys,
-	)
-
-	// Debug: Check event type detection
-	eventType, hasEventType := msg.Values["event_type"].(string)
-	typeField, hasTypeField := msg.Values["type"].(string)
-
-	c.logger.Info("DEBUG: Event type detection",
-		"has_event_type", hasEventType,
-		"event_type", eventType,
-		"has_type_field", hasTypeField,
-		"type_field", typeField,
-		"expected_event_1", "01_PRODUCT_DETECTED",
-		"expected_event_2", "NEW_PRODUCT_DETECTED",
-	)
-
-	// Check for multiple possible event types that could indicate new products
-	validEventTypes := []string{
-		"01_PRODUCT_DETECTED",
-		"NEW_PRODUCT_DETECTED",
-		"02A_PRODUCT_VALIDATED", // From logs - this seems to be a valid event
-	}
-
-	isValidEvent := false
-	if hasEventType {
-		for _, validType := range validEventTypes {
-			if eventType == validType {
-				isValidEvent = true
-				break
-			}
-		}
-	} else if hasTypeField {
-		for _, validType := range validEventTypes {
-			if typeField == validType {
-				isValidEvent = true
-				eventType = typeField
-				break
-			}
-		}
-	}
-
-	if !isValidEvent {
-		c.logger.Info("Skipping non-matching event", "event_type", eventType, "type_field", typeField)
-		return nil // Skip non-matching events
-	}
-
-	c.logger.Info("Processing valid event",
-		"event_type", eventType,
-		"message_id", msg.ID,
-	)
-
-	// Try multiple payload structures
-	var payload map[string]interface{}
-
-	// Method 1: Direct values from the message
-	if dataField, ok := msg.Values["data"]; ok {
-		if dataStr, ok := dataField.(string); ok {
-			if err := json.Unmarshal([]byte(dataStr), &payload); err == nil {
-				c.logger.Info("Parsed payload from data field")
-			}
-		} else if dataMap, ok := dataField.(map[string]interface{}); ok {
-			payload = dataMap
-			c.logger.Info("Used payload from data map")
-		}
-	}
-
-	// Method 2: Traditional payload field
-	if payload == nil {
-		if payloadStr, ok := msg.Values["payload"].(string); ok {
-			if err := json.Unmarshal([]byte(payloadStr), &payload); err == nil {
-				c.logger.Info("Parsed payload from payload field")
-			}
-		}
-	}
-
-	// Method 3: Direct message values as payload
-	if payload == nil {
-		payload = make(map[string]interface{})
-		for k, v := range msg.Values {
-			if k != "event_type" && k != "type" && k != "timestamp" {
-				payload[k] = v
-			}
-		}
-		c.logger.Info("Created payload from message values")
-	}
-
-	// Debug: Log the parsed payload
-	payloadBytes, _ := json.Marshal(payload)
-	c.logger.Info("DEBUG: Parsed payload", "payload", string(payloadBytes))
-
-	// Get ASIN from multiple possible locations
-	var asin string
-
-	// Method 1: Direct ASIN field in payload
-	if asinVal, ok := payload["asin"].(string); ok && asinVal != "" {
-		asin = asinVal
-	}
-
-	// Method 2: ASIN in aggregate_id
-	if asin == "" {
-		if aggregateID, ok := msg.Values["aggregate_id"].(string); ok && aggregateID != "" {
-			asin = aggregateID
-		}
-	}
-
-	// Method 3: ASIN in original_id
-	if asin == "" {
-		if originalID, ok := msg.Values["original_id"].(string); ok && originalID != "" {
-			asin = originalID
-		}
-	}
-
-	// Method 4: Try parsing from nested data structure
-	if asin == "" {
-		if data, ok := payload["data"].(map[string]interface{}); ok {
-			if asinVal, ok := data["asin"].(string); ok && asinVal != "" {
-				asin = asinVal
-			}
-		}
-	}
-
-	if asin == "" {
-		return fmt.Errorf("missing ASIN in payload/event")
-	}
-
-	c.logger.Info("Processing product", 
-		"message_id", msg.ID,
+		"event_type", event.Type,
 		"asin", asin,
-		"title", payload["title"],
+		"aggregate_type", event.AggregateType,
 	)
+
+	// Parse payload to get product details
+	var productPayload ProductCreatedPayload
+	if err := ParsePayload(event.Payload, &productPayload); err != nil {
+		c.logger.Warn("Failed to parse product payload, proceeding with ASIN only",
+			"asin", asin,
+			"error", err,
+		)
+		// Use minimal info if payload parsing fails
+		productPayload = ProductCreatedPayload{
+			ASIN:          asin,
+			Title:         "Unknown Product",
+			DetailPageURL: fmt.Sprintf("https://www.amazon.de/dp/%s", asin),
+		}
+	}
 
 	// Check if product exists and is still pending
 	var status string
-	err := c.db.QueryRow(ctx, "SELECT status FROM products WHERE asin = $1", asin).Scan(&status)
-	if err != nil {
+	var dbErr error
+	dbErr = c.db.QueryRow(ctx, "SELECT status FROM products WHERE asin = $1", asin).Scan(&status)
+	if dbErr != nil {
 		// Product doesn't exist, create it
-		title, _ := payload["name"].(string)
-		url, _ := payload["detail_page_url"].(string)
+		url := productPayload.DetailPageURL
 		if url == "" {
 			url = fmt.Sprintf("https://www.amazon.de/dp/%s", asin)
 		}
-		
-		insertQuery := `INSERT INTO products (asin, title, url, status) 
-		                VALUES ($1, $2, $3, 'pending') 
+
+		insertQuery := `INSERT INTO products (asin, title, url, brand, status)
+		                VALUES ($1, $2, $3, $4, 'pending')
 		                ON CONFLICT (asin) DO NOTHING`
-		_, insertErr := c.db.Exec(ctx, insertQuery, asin, title, url)
+		_, insertErr := c.db.Exec(ctx, insertQuery,
+			productPayload.ASIN,
+			productPayload.Title,
+			url,
+			productPayload.Brand,
+		)
 		if insertErr != nil {
 			c.logger.Error("Failed to insert product", "asin", asin, "error", insertErr)
 			return nil
 		}
-		c.logger.Info("Created new product", "asin", asin)
+		c.logger.Info("Created new product", "asin", asin, "title", productPayload.Title)
 		status = "pending"
 	}
-	
+
 	if status != "pending" {
 		c.logger.Info("Skipping non-pending product", "asin", asin, "status", status)
 		return nil
