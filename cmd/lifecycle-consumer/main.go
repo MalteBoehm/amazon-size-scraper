@@ -46,7 +46,9 @@ type ProductCreatedPayload struct {
 
 // Event constants from tall-affiliate-common
 const (
-	EVENT_02A_PRODUCT_VALIDATED = "02A_PRODUCT_VALIDATED"
+	EVENT_01_PRODUCT_DETECTED     = "01_PRODUCT_DETECTED"
+	EVENT_NEW_PRODUCT_DETECTED    = "NEW_PRODUCT_DETECTED"
+	EVENT_02A_PRODUCT_VALIDATED   = "02A_PRODUCT_VALIDATED"
 )
 
 // ParsePayload matches tall-affiliate-common helper function
@@ -198,18 +200,54 @@ func (c *Consumer) Run(ctx context.Context) error {
 }
 
 func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error {
+	// DEBUG: Log full message structure
+	c.logger.Info("DEBUG: Processing message",
+		"message_id", msg.ID,
+		"keys", func() []string {
+			keys := make([]string, 0, len(msg.Values))
+			for k := range msg.Values {
+				keys = append(keys, k)
+			}
+			return keys
+		}(),
+		"event_type", msg.Values["event_type"],
+		"type", msg.Values["type"],
+	)
+
+	// DEBUG: Log specific fields we care about
+	c.logger.Info("DEBUG: Event type detection",
+		"has_event_type", msg.Values["event_type"] != nil,
+		"event_type", fmt.Sprintf("%v", msg.Values["event_type"]),
+		"has_type_field", msg.Values["type"] != nil,
+		"type_field", fmt.Sprintf("%v", msg.Values["type"]),
+		"expected_event_1", "01_PRODUCT_DETECTED",
+		"expected_event_2", "NEW_PRODUCT_DETECTED",
+	)
+
 	// Parse the event using tall-affiliate-common structure
 	var event Event
 
-	// Method 1: Try to unmarshal the entire message as a single event JSON
-	eventJSON, err := json.Marshal(msg.Values)
-	if err != nil {
-		return fmt.Errorf("failed to marshal message values: %w", err)
+	// Method 1: Try to extract from "data" field (Relay format)
+	if dataStr, hasData := msg.Values["data"].(string); hasData {
+		if err := json.Unmarshal([]byte(dataStr), &event); err == nil {
+			c.logger.Info("DEBUG: Parsed event from data field",
+				"type", event.Type,
+				"aggregate_id", event.AggregateID,
+			)
+		} else {
+			c.logger.Info("DEBUG: Failed to parse data field", "error", err)
+		}
 	}
 
-	if err := json.Unmarshal(eventJSON, &event); err != nil {
-		// Method 2: Try to find individual fields and build event manually
-		event.Type, _ = msg.Values["type"].(string)
+	// Method 2: Fallback to direct field extraction
+	if event.Type == "" {
+		// Try event_type field first (from Relay)
+		event.Type, _ = msg.Values["event_type"].(string)
+		if event.Type == "" {
+			// Try type field
+			event.Type, _ = msg.Values["type"].(string)
+		}
+
 		event.AggregateID, _ = msg.Values["aggregate_id"].(string)
 		event.AggregateType, _ = msg.Values["aggregate_type"].(string)
 		event.Payload = msg.Values["payload"]
@@ -220,10 +258,17 @@ func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error
 				event.Timestamp = timestamp
 			}
 		}
+
+		c.logger.Info("DEBUG: Used fallback field extraction",
+			"type", event.Type,
+			"aggregate_id", event.AggregateID,
+		)
 	}
 
 	// Check if this is a product event we should process
-	if event.Type != EVENT_02A_PRODUCT_VALIDATED {
+	if event.Type != EVENT_02A_PRODUCT_VALIDATED &&
+	   event.Type != EVENT_01_PRODUCT_DETECTED &&
+	   event.Type != EVENT_NEW_PRODUCT_DETECTED {
 		c.logger.Info("Skipping non-product event",
 			"event_type", event.Type,
 			"aggregate_id", event.AggregateID,
@@ -231,18 +276,47 @@ func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) error
 		return nil
 	}
 
+	c.logger.Info("Processing valid event",
+		"event_type", event.Type,
+		"message_id", msg.ID,
+	)
+
+	// DEBUG: Check all possible ASIN sources
+	c.logger.Info("DEBUG: ASIN extraction",
+		"has_aggregate_id", event.AggregateID != "",
+		"aggregate_id", event.AggregateID,
+		"payload_type", fmt.Sprintf("%T", event.Payload),
+	)
+
 	// Get ASIN from aggregate_id (standard tall-affiliate-common pattern)
 	asin := event.AggregateID
 	if asin == "" {
 		// Fallback: try to parse ASIN from payload
 		var payload ProductCreatedPayload
 		if err := ParsePayload(event.Payload, &payload); err == nil {
+			c.logger.Info("DEBUG: Parsed payload", "asin", payload.ASIN, "title", payload.Title)
 			asin = payload.ASIN
+		} else {
+			c.logger.Info("DEBUG: Failed to parse payload", "error", err)
 		}
 	}
 
 	if asin == "" {
-		return fmt.Errorf("missing ASIN in event (aggregate_id or payload)")
+		c.logger.Error("DEBUG: ASIN extraction failed",
+			"event_type", event.Type,
+			"aggregate_id", event.AggregateID,
+			"payload_keys", func() []string {
+				if payloadMap, ok := event.Payload.(map[string]interface{}); ok {
+					keys := make([]string, 0, len(payloadMap))
+					for k := range payloadMap {
+						keys = append(keys, k)
+					}
+					return keys
+				}
+				return []string{fmt.Sprintf("%T", event.Payload)}
+			}(),
+		)
+		return fmt.Errorf("missing ASIN in payload/event")
 	}
 
 	c.logger.Info("Processing validated product",
