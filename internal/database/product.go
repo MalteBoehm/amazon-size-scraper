@@ -23,11 +23,10 @@ type Product struct {
 	Title        string          `db:"title"`
 	Brand        sql.NullString  `db:"brand"`
 	Category     sql.NullString  `db:"category"`
-	URL          string          `db:"url"`
-	SizeTable    json.RawMessage `db:"size_table"`
+	URL          string          `db:"detail_page_url"`
+	SizeTable    json.RawMessage `db:"size_chart_data"`
 	Status       ProductStatus   `db:"status"`
 	ErrorMessage sql.NullString  `db:"error_message"`
-	ScrapedAt    sql.NullTime    `db:"scraped_at"`
 	CreatedAt    time.Time       `db:"created_at"`
 	UpdatedAt    time.Time       `db:"updated_at"`
 }
