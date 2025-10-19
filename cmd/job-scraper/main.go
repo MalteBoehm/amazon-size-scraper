@@ -9,15 +9,18 @@ import (
     "os"
     "os/signal"
     "strconv"
+    "strings"
     "syscall"
     "time"
 
     "github.com/maltedev/amazon-size-scraper/internal/browser"
     "github.com/maltedev/amazon-size-scraper/internal/config"
     intdb "github.com/maltedev/amazon-size-scraper/internal/database"
+    "github.com/maltedev/amazon-size-scraper/internal/events"
     "github.com/maltedev/amazon-size-scraper/internal/parser"
     "github.com/maltedev/amazon-size-scraper/internal/scraper"
     "github.com/maltedev/amazon-size-scraper/pkg/logger"
+    tallEvents "github.com/MalteBoehm/tall-affiliate-common/pkg/events"
 )
 
 func main() {
@@ -240,12 +243,17 @@ func processJob(ctx context.Context, job *ScraperJob, db *intdb.DB,
 
 		// Process each product result
 		for _, result := range results {
-			// Here you would typically:
-			// 1. Check if product already exists in database
-			// 2. Create new product record if needed
-			// 3. Trigger product enrichment/scraping
+			// Store product in database with transactional safety
+			if err := storeProduct(ctx, db, job.ID, result, page, logger); err != nil {
+				logger.Error("Failed to store product",
+					"asin", result.ASIN,
+					"title", result.Title,
+					"error", err)
+				// Continue with next product even if this one fails
+				continue
+			}
 
-			logger.Debug("Found product",
+			logger.Debug("Successfully stored product",
 				"asin", result.ASIN,
 				"title", result.Title,
 				"price", result.Price)
@@ -361,4 +369,149 @@ func firstNonEmpty(vals ...string) string {
 func portIfNonZero(p int, def int) int {
     if p > 0 { return p }
     return def
+}
+
+// storeProduct stores a product in the database with transactional safety
+// This function:
+// 1. Checks if product already exists
+// 2. Creates product record if needed
+// 3. Creates job-product relationship
+// 4. Creates outbox event for NEW_PRODUCT_DETECTED
+func storeProduct(ctx context.Context, db *intdb.DB, jobID string, result scraper.SearchResult, page int, logger *slog.Logger) error {
+    if result.ASIN == "" {
+        return fmt.Errorf("product ASIN is empty")
+    }
+
+    var isNewProduct bool
+    var err error
+
+    // Execute all operations in a single transaction for atomicity
+    err = db.Transaction(ctx, func(tx intdb.Tx) error {
+        // Check if product already exists
+        var existingCount int
+        err := tx.QueryRow(ctx, "SELECT COUNT(*) FROM product WHERE asin = $1", result.ASIN).Scan(&existingCount)
+        if err != nil {
+            return fmt.Errorf("failed to check existing product: %w", err)
+        }
+
+        // Create product if it doesn't exist
+        if existingCount == 0 {
+            isNewProduct = true
+
+            // Build detail page URL if not provided
+            detailPageURL := result.URL
+            if detailPageURL == "" {
+                detailPageURL = fmt.Sprintf("https://www.amazon.de/dp/%s", result.ASIN)
+            }
+
+            // Extract brand from title (simple extraction)
+            brand := extractBrandFromTitle(result.Title)
+
+            // Insert new product
+            query := `
+                INSERT INTO product (
+                    asin, title, brand, category, detail_page_url,
+                    size_chart_data, colors, status, scraped_at
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9
+                )`
+
+            _, err = tx.Exec(ctx, query,
+                result.ASIN,
+                result.Title,
+                brand,
+                "", // category - will be filled by enrichment
+                detailPageURL,
+                nil, // size_chart_data - will be filled by scraping
+                nil, // colors - will be filled by enrichment
+                "pending", // status
+                nil, // scraped_at - will be set when details are scraped
+            )
+            if err != nil {
+                return fmt.Errorf("failed to insert product: %w", err)
+            }
+
+            logger.Info("Created new product record",
+                "asin", result.ASIN,
+                "title", result.Title,
+                "brand", brand)
+        } else {
+            logger.Debug("Product already exists", "asin", result.ASIN)
+        }
+
+        // Create job-product relationship (this will replace any existing relationship)
+        query := `
+            INSERT INTO job_products (job_id, asin, page_number)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (job_id, asin)
+            DO UPDATE SET page_number = EXCLUDED.page_number`
+
+        _, err = tx.Exec(ctx, query, jobID, result.ASIN, page)
+        if err != nil {
+            return fmt.Errorf("failed to create job-product relationship: %w", err)
+        }
+
+        // Create outbox event only for new products
+        if isNewProduct {
+            if err := createProductDetectedOutboxEvent(ctx, tx, result, logger); err != nil {
+                return fmt.Errorf("failed to create outbox event: %w", err)
+            }
+        }
+
+        return nil
+    })
+
+    if err != nil {
+        return fmt.Errorf("transaction failed for product %s: %w", result.ASIN, err)
+    }
+
+    return nil
+}
+
+// extractBrandFromTitle attempts to extract brand from product title
+func extractBrandFromTitle(title string) string {
+    if title == "" {
+        return ""
+    }
+
+    // Simple brand extraction - take first word or common brand patterns
+    words := strings.Fields(title)
+    if len(words) == 0 {
+        return ""
+    }
+
+    // Check for common brand patterns (uppercase words)
+    firstWord := words[0]
+    if len(firstWord) > 2 && strings.ToUpper(firstWord) == firstWord {
+        return firstWord
+    }
+
+    // Fallback to first word
+    return firstWord
+}
+
+// createProductDetectedOutboxEvent creates an enhanced outbox event for NEW_PRODUCT_DETECTED
+func createProductDetectedOutboxEvent(ctx context.Context, tx intdb.Tx, result scraper.SearchResult, logger *slog.Logger) error {
+    // Use the enhanced event validator for better validation and enrichment
+    validator := events.NewProductEventValidator(logger)
+
+    // Create the enhanced outbox event with proper validation
+    outboxEvent, err := validator.CreateProductDetectedEvent(result, "")
+    if err != nil {
+        return fmt.Errorf("failed to create enhanced product detected event: %w", err)
+    }
+
+    // Use the outbox repository to insert the enhanced event
+    outboxRepo := intdb.NewOutboxRepository(nil) // db is not needed for InsertWithTx
+    if err := outboxRepo.InsertWithTx(ctx, tx, outboxEvent); err != nil {
+        return fmt.Errorf("failed to insert enhanced outbox event: %w", err)
+    }
+
+    logger.Info("Created enhanced NEW_PRODUCT_DETECTED outbox event",
+        "asin", result.ASIN,
+        "event_type", tallEvents.Event_01_ProductDetected,
+        "has_dimensions", result.HasTable,
+        "price", result.Price)
+
+    return nil
 }
