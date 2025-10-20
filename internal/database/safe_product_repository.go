@@ -376,13 +376,13 @@ func (spr *SafeProductRepository) GetProductLifecycleByASIN(ctx context.Context,
 			rating, review_count, status, category,
 			available_sizes, size_chart_data, created_at, updated_at,
 			material_composition, material_full_text, care_instructions,
-			colors, material, gender, product_groups, reviews_content,
+			color, color_variations, material, gender, product_groups, reviews_content,
 			is_prime_eligible, in_stock, variation_attributes, model
 		FROM product
 		WHERE asin = $1`
 
 	var p ProductLifecycle
-	var imageURLs, features, availableSizes, sizeTable, materialComposition, careInstructions, colors, productGroups, variationAttributes sql.NullString
+	var imageURLs, features, availableSizes, sizeTable, materialComposition, careInstructions, color, colorVariations, productGroups, variationAttributes sql.NullString
 
 	err := spr.db.QueryRow(ctx, query, asin).Scan(
 		&p.ID, &p.ASIN, &p.Title, &p.Brand, &p.DetailPageURL,
@@ -390,7 +390,7 @@ func (spr *SafeProductRepository) GetProductLifecycleByASIN(ctx context.Context,
 		&p.Rating, &p.ReviewCount, &p.Status, &p.Category,
 		&availableSizes, &sizeTable, &p.CreatedAt, &p.UpdatedAt,
 		&materialComposition, &p.MaterialFullText, &careInstructions,
-		&colors, &p.Material, &p.Gender, &productGroups, &p.ReviewsContent,
+		&color, &colorVariations, &p.Material, &p.Gender, &productGroups, &p.ReviewsContent,
 		&p.IsPrimeEligible, &p.InStock, &variationAttributes, &p.Model,
 	)
 
@@ -420,8 +420,8 @@ func (spr *SafeProductRepository) GetProductLifecycleByASIN(ctx context.Context,
 	if careInstructions.Valid {
 		p.CareInstructions = json.RawMessage(careInstructions.String)
 	}
-	if colors.Valid {
-		p.Colors = json.RawMessage(colors.String)
+	if colorVariations.Valid {
+		p.Colors = json.RawMessage(colorVariations.String)
 	}
 	if productGroups.Valid {
 		p.ProductGroups = json.RawMessage(productGroups.String)

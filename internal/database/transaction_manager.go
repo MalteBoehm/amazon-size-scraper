@@ -541,6 +541,7 @@ func (pts *ProductTransactionService) updateProductLifecycleTx(ctx context.Conte
 			material_composition = $15,
 			material_full_text = $16,
 			care_instructions = $17,
+			color_variations = $18,
 			updated_at = NOW()
 		WHERE asin = $1`
 
@@ -566,11 +567,18 @@ func (pts *ProductTransactionService) updateProductLifecycleTx(ctx context.Conte
 		careInstructions = json.RawMessage("[]")
 	}
 
+	// Prepare color_variations JSON
+	colorVariations := p.Colors
+	if colorVariations == nil || len(colorVariations) == 0 {
+		colorVariations = json.RawMessage("[]")
+	}
+
 	result, err := tx.Exec(ctx, query,
 		p.ASIN, p.Title, p.Brand, p.DetailPageURL,
 		imageURLs, features, p.CurrentPrice, p.Currency,
 		p.Rating, p.ReviewCount, p.Status, p.Category,
 		availableSizes, p.SizeTable, materialComposition, p.MaterialFullText, careInstructions,
+		colorVariations,
 	)
 
 	if err != nil {

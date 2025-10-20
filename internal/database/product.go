@@ -101,7 +101,7 @@ func (db *DB) UpdateProductColors(ctx context.Context, asin string, colors []*mo
 	// Try to update the products table first (if it exists)
 	query := `
 		UPDATE product SET
-			colors = $2,
+			color_variations = $2,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE asin = $1`
 
@@ -110,7 +110,7 @@ func (db *DB) UpdateProductColors(ctx context.Context, asin string, colors []*mo
 		// If products table doesn't have color_variations column, try product lifecycle table
 		queryLifecycle := `
 			UPDATE product SET
-				colors = $2,
+				color_variations = $2,
 				enrichment_source = 'scraper',
 				updated_at = CURRENT_TIMESTAMP
 			WHERE asin = $1`
