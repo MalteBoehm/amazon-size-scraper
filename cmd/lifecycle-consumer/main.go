@@ -579,6 +579,15 @@ func (c *Consumer) updateProduct(ctx context.Context, asin string, dimensions *S
 	colorsJSON, _ := json.Marshal(dimensions.Colors)
 	productGroupsJSON, _ := json.Marshal(dimensions.ProductGroups)
 
+	// Create material composition JSON for proper storage
+	materialCompJSON, _ := json.Marshal(map[string]interface{}{"material": dimensions.Material})
+
+	// Extract first product group as string for single column
+	var productGroupStr string
+	if len(dimensions.ProductGroups) > 0 {
+		productGroupStr = dimensions.ProductGroups[0]
+	}
+
 	query := `
 		UPDATE product
 		SET size_chart_data = $2,
@@ -588,10 +597,10 @@ func (c *Consumer) updateProduct(ctx context.Context, asin string, dimensions *S
 		    category = COALESCE(NULLIF($6, ''), category),
 		    is_prime_eligible = $7,
 		    in_stock = $8,
-		    material = COALESCE(NULLIF($9, ''), material),
+		    material_composition = CASE WHEN $9::jsonb IS NOT NULL THEN $9::jsonb ELSE material_composition END,
 		    gender = COALESCE(NULLIF($10, ''), gender),
-		    colors = CASE WHEN $11::jsonb IS NOT NULL THEN $11::jsonb ELSE colors END,
-		    product_groups = CASE WHEN $12::jsonb IS NOT NULL THEN $12::jsonb ELSE product_groups END,
+		    color_variations = CASE WHEN $11::jsonb IS NOT NULL THEN $11::jsonb ELSE color_variations END,
+		    product_group = COALESCE(NULLIF($12, ''), product_group),
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE asin = $1`
 
@@ -599,8 +608,8 @@ func (c *Consumer) updateProduct(ctx context.Context, asin string, dimensions *S
 		asin, sizeTableJSON, status,
 		dimensions.Title, dimensions.Brand, dimensions.Category,
 		dimensions.IsPrimeEligible, dimensions.InStock,
-		dimensions.Material, dimensions.Gender,
-		colorsJSON, productGroupsJSON,
+		materialCompJSON, dimensions.Gender,
+		colorsJSON, productGroupStr,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update product: %w", err)

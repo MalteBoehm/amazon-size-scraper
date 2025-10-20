@@ -35,10 +35,10 @@ type ProductLifecycle struct {
 	SizeTable           json.RawMessage `db:"size_table"`
 	IsPrimeEligible     bool            `db:"is_prime_eligible"`
 	InStock             bool            `db:"in_stock"`
-	Colors              json.RawMessage `db:"colors"`
-	Material            string          `db:"material"`
+	Colors              json.RawMessage `db:"color_variations"`
+	Material            string          `db:"material_full_text"`
 	Gender              string          `db:"gender"`
-	ProductGroups       json.RawMessage `db:"product_groups"`
+	ProductGroups       json.RawMessage `db:"product_group"`
 	ReviewsContent      string          `db:"reviews_content"`
 	CreatedAt           time.Time       `db:"created_at"`
 	UpdatedAt           time.Time       `db:"updated_at"`
