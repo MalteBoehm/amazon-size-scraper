@@ -577,7 +577,6 @@ func (c *Consumer) updateProduct(ctx context.Context, asin string, dimensions *S
 
 	// Marshal arrays to JSON
 	colorsJSON, _ := json.Marshal(dimensions.Colors)
-	productGroupsJSON, _ := json.Marshal(dimensions.ProductGroups)
 
 	// Create material composition JSON for proper storage
 	materialCompJSON, _ := json.Marshal(map[string]interface{}{"material": dimensions.Material})
