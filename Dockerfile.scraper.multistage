@@ -7,10 +7,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/usr/local/go/bin:/go/bin:$PATH \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-# Install Node.js for npm playwright install
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs
-
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -47,11 +43,6 @@ RUN echo "Installing Playwright browsers..." && \
 RUN echo "Checking for Chromium executables..." && \
     find /ms-playwright -name "chrome" -type f 2>/dev/null || echo "No chrome binary found" && \
     find /ms-playwright -name "headless_shell" -type f 2>/dev/null || echo "No headless_shell found"
-
-# Install Playwright browsers manually as fallback
-RUN echo "Manual Playwright browser installation..." && \
-    mkdir -p /ms-playwright && \
-    npx playwright install chromium --with-deps || echo "npm playwright install failed"
 
 # Set proper permissions for Playwright browsers
 RUN chmod -R 755 /ms-playwright || echo "Permission setting failed"
