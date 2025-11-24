@@ -7,8 +7,9 @@ import (
     "fmt"
     "log/slog"
     "os"
-    "os/signal"
-    "strconv"
+    	"os/signal"
+        "runtime/debug"
+        "strconv"
     "strings"
     "syscall"
     "time"
@@ -93,6 +94,12 @@ func main() {
         MaxConnIdle: 1 * time.Minute,
     }
 
+    logger.Info("Database Config", 
+        "Host", dbCfg.Host, 
+        "Port", dbCfg.Port, 
+        "User", dbCfg.User, 
+        "DBName", dbCfg.Database)
+
     db, err := intdb.New(ctx, dbCfg)
     if err != nil {
         logger.Error("Failed to connect to database", "error", err)
@@ -163,7 +170,7 @@ type ScraperJob struct {
 }
 
 func processNextJob(ctx context.Context, db *intdb.DB,
-    searchScraper *scraper.SearchScraper, parser *parser.AmazonParser, logger *slog.Logger) error {
+    searchScraper *scraper.SearchScraper, parser *parser.AmazonParser, logger *slog.Logger) (err error) {
 
     // Get and mark next pending job atomically
     job, err := fetchAndMarkNextJob(ctx, db)
@@ -176,18 +183,37 @@ func processNextJob(ctx context.Context, db *intdb.DB,
 		return nil
 	}
 
+    // Add recovery for panics during job processing
+    defer func() {
+        if r := recover(); r != nil {
+            panicErr := fmt.Errorf("panic during job processing: %v", r)
+            logger.Error("Job processing panicked", 
+                "job_id", job.ID, 
+                "panic", r,
+                "stack", string(debug.Stack()))
+            
+            // Attempt to mark job as failed
+            if markErr := markJobFailed(ctx, db, job.ID, panicErr.Error()); markErr != nil {
+                logger.Error("Failed to mark panicked job as failed", "job_id", job.ID, "error", markErr)
+            }
+            
+            // Return error to caller
+            err = panicErr
+        }
+    }()
+
 	logger.Info("Processing job",
 		"job_id", job.ID,
 		"search_query", job.SearchQuery,
 		"max_pages", job.MaxPages)
 
 	// Process the job
-    if err := processJob(ctx, job, db, searchScraper, parser, logger); err != nil {
+    if processErr := processJob(ctx, job, db, searchScraper, parser, logger); processErr != nil {
 		// Mark job as failed
-        if markErr := markJobFailed(ctx, db, job.ID, err.Error()); markErr != nil {
+        if markErr := markJobFailed(ctx, db, job.ID, processErr.Error()); markErr != nil {
 			logger.Error("Failed to mark job as failed", "job_id", job.ID, "error", markErr)
 		}
-		return fmt.Errorf("job processing failed: %w", err)
+		return fmt.Errorf("job processing failed: %w", processErr)
 	}
 
 	// Mark job as completed
