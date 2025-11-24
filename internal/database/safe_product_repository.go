@@ -376,7 +376,7 @@ func (spr *SafeProductRepository) GetProductLifecycleByASIN(ctx context.Context,
 			rating, review_count, status, category,
 			available_sizes, size_chart_data, created_at, updated_at,
 			material_composition, material_full_text, care_instructions,
-			color, color_variations, material, gender, product_groups, reviews_content,
+			color, color_variations, material, gender, product_group, reviews_content,
 			is_prime_eligible, in_stock, variation_attributes, model
 		FROM products
 		WHERE asin = $1`
