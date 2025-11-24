@@ -74,9 +74,14 @@ server-linux
 amazon-scraper
 /amazon-scraper
 batch-enricher
+lifecycle-consumer
+size-scraper
+job-scraper
+redis-job-consumer
 
 # SQL scripts (test data)
 *.sql
+!migrations/*.sql
 
 # Temporary files
 tmp/

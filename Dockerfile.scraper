@@ -14,8 +14,10 @@ RUN go build -o /out/$BINARY ./cmd/$BINARY
 
 FROM alpine:3.19
 WORKDIR /app
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata postgresql-client
 COPY --from=builder /out/* /app/
+COPY --from=builder /src/migrations /app/migrations
+COPY --from=builder /src/scripts /app/scripts
 
 # Use the binary name as the default command
 CMD ["sh", "-c", "exec /app/$(basename ${BINARY:-lifecycle-consumer})"]

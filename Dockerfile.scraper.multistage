@@ -14,7 +14,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates tzdata git wget curl \
+    ca-certificates tzdata git wget curl postgresql-client \
     && rm -rf /var/lib/apt/lists/* \
     && ln -fs /usr/share/zoneinfo/$TZ /etc/localtime \
     && dpkg-reconfigure -f noninteractive tzdata \
