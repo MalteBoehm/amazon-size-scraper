@@ -227,9 +227,24 @@ func (ps *ProductScraper) extractSizeTable(page playwright.Page) (*database.Size
 	ps.logger.Info("clicked size table button")
 
 	// Wait for modal/popup to appear and table to be present
-	table := page.Locator(`.a-popover-content table, .a-modal-content table, [id*="popover"] table`).First()
-	if err := table.WaitFor(); err != nil {
-		return nil, fmt.Errorf("size table not found in modal")
+	// Enhanced selectors to match the provided HTML structure (fit-sizechartv2)
+	tableSelector := `.a-popover-content table, .a-modal-content table, [id*="popover"] table, #fit-sizechartv2-0 table`
+	table := page.Locator(tableSelector).First()
+	
+	// Wait slightly longer for dynamic content load
+	if err := table.WaitFor(playwright.LocatorWaitForOptions{Timeout: playwright.Float(5000)}); err != nil {
+		// Try looking for the container first
+		container := page.Locator(`#fit-sizechartv2-0, .a-popover-inner`).First()
+		if err := container.WaitFor(playwright.LocatorWaitForOptions{Timeout: playwright.Float(2000)}); err == nil {
+			// Container found, try finding table inside again
+			if count, _ := table.Count(); count > 0 {
+				// It appeared
+			} else {
+				return nil, fmt.Errorf("size table container found but no table inside")
+			}
+		} else {
+			return nil, fmt.Errorf("size table not found in modal")
+		}
 	}
 
 	// Save full HTML for debugging if configured (size table modal)
@@ -246,30 +261,61 @@ func (ps *ProductScraper) extractSizeTable(page playwright.Page) (*database.Size
 		}
 	}
 
-	// Extract table data using JavaScript
+	// Extract table data using JavaScript with enhanced logic for multiple tables (tabs)
 	tableData, err := page.Evaluate(`() => {
-		const tables = document.querySelectorAll('.a-popover-content table, .a-modal-content table, [id*="popover"] table');
+		// Select all potential tables in the popover/modal
+		const tables = document.querySelectorAll('.a-popover-content table, .a-modal-content table, [id*="popover"] table, [id*="fit-sizechartv2"] table');
 		if (tables.length === 0) {
 			return null;
 		}
 		
-		const table = tables[0];
+		// Prefer the visible one or the one with most rows
+		let table = tables[0];
+		if (tables.length > 1) {
+			// Heuristic: Use the first table that looks like a data table (has tbody and > 2 rows)
+			for (let i = 0; i < tables.length; i++) {
+				if (tables[i].rows.length > 2) {
+					table = tables[i];
+					break;
+				}
+			}
+		}
+		
 		const data = {
 			headers: [],
 			rows: []
 		};
 		
-		// Get all rows
-		for (let i = 0; i < table.rows.length; i++) {
+		// Get headers from thead or first row
+		let rowStart = 0;
+		let headerRow = table.querySelector('thead tr');
+		if (!headerRow) {
+			headerRow = table.rows[0];
+			rowStart = 1; // Skip first row in data processing if used as header
+		}
+		
+		if (headerRow) {
+			const headerCells = headerRow.querySelectorAll('th, td');
+			for (let j = 0; j < headerCells.length; j++) {
+				data.headers.push(headerCells[j].innerText.trim());
+			}
+		}
+		
+		// Get all data rows
+		for (let i = rowStart; i < table.rows.length; i++) {
 			const row = table.rows[i];
+			
+			// Skip header rows inside body (sometimes happens)
+			if (row.querySelector('th') && !row.querySelector('td')) continue;
+			
 			const rowData = [];
-			for (let j = 0; j < row.cells.length; j++) {
-				rowData.push(row.cells[j].textContent.trim());
+			const cells = row.querySelectorAll('td, th'); // Sometimes first col is th
+			
+			for (let j = 0; j < cells.length; j++) {
+				rowData.push(cells[j].innerText.trim());
 			}
 			
-			if (i === 0) {
-				data.headers = rowData;
-			} else {
+			if (rowData.length > 0) {
 				data.rows.push(rowData);
 			}
 		}
@@ -282,7 +328,7 @@ func (ps *ProductScraper) extractSizeTable(page playwright.Page) (*database.Size
 	}
 
 	if tableData == nil {
-		return nil, fmt.Errorf("size table not found in modal")
+		return nil, fmt.Errorf("size table not found in modal (js)")
 	}
 
 	ps.logger.Info("extracted table data")
