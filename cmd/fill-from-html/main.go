@@ -114,7 +114,7 @@ func main() {
 			careJSON = []byte("[]")
 		}
 
-		q := `INSERT INTO product (
+		q := `INSERT INTO products (
 			asin, title, brand, detail_page_url, category,
 			image_urls, features, available_sizes, variation_attributes,
 			size, color, material_composition, material_full_text, care_instructions
@@ -124,19 +124,19 @@ func main() {
 			$10, $11, $12::jsonb, $13, $14::jsonb
 		)
 		ON CONFLICT (asin) DO UPDATE SET
-			title = COALESCE(NULLIF(EXCLUDED.title,''), product.title),
-			brand = COALESCE(NULLIF(EXCLUDED.brand,''), product.brand),
-			detail_page_url = COALESCE(NULLIF(EXCLUDED.detail_page_url,''), product.detail_page_url),
-			category = COALESCE(NULLIF(EXCLUDED.category,''), product.category),
-			image_urls = COALESCE(EXCLUDED.image_urls, product.image_urls),
-			features = COALESCE(EXCLUDED.features, product.features),
-			available_sizes = COALESCE(EXCLUDED.available_sizes, product.available_sizes),
-			variation_attributes = COALESCE(EXCLUDED.variation_attributes, product.variation_attributes),
-			size = COALESCE(NULLIF(EXCLUDED.size,''), product.size),
-			color = COALESCE(NULLIF(EXCLUDED.color,''), product.color),
-			material_composition = COALESCE(EXCLUDED.material_composition, product.material_composition),
-			material_full_text = COALESCE(EXCLUDED.material_full_text, product.material_full_text),
-			care_instructions = COALESCE(EXCLUDED.care_instructions, product.care_instructions),
+			title = COALESCE(NULLIF(EXCLUDED.title,''), products.title),
+			brand = COALESCE(NULLIF(EXCLUDED.brand,''), products.brand),
+			detail_page_url = COALESCE(NULLIF(EXCLUDED.detail_page_url,''), products.detail_page_url),
+			category = COALESCE(NULLIF(EXCLUDED.category,''), products.category),
+			image_urls = COALESCE(EXCLUDED.image_urls, products.image_urls),
+			features = COALESCE(EXCLUDED.features, products.features),
+			available_sizes = COALESCE(EXCLUDED.available_sizes, products.available_sizes),
+			variation_attributes = COALESCE(EXCLUDED.variation_attributes, products.variation_attributes),
+			size = COALESCE(NULLIF(EXCLUDED.size,''), products.size),
+			color = COALESCE(NULLIF(EXCLUDED.color,''), products.color),
+			material_composition = COALESCE(EXCLUDED.material_composition, products.material_composition),
+			material_full_text = COALESCE(EXCLUDED.material_full_text, products.material_full_text),
+			care_instructions = COALESCE(EXCLUDED.care_instructions, products.care_instructions),
 			updated_at = NOW()`
 
 		_, err = db.Exec(ctx, q,

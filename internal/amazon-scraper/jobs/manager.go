@@ -150,19 +150,14 @@ func (m *Manager) GetJob(ctx context.Context, jobID string) (*Job, error) {
 
 	// Get additional stats
 	countQuery := `
-		SELECT 
-			COUNT(DISTINCT jp.asin) as total,
-			COUNT(DISTINCT CASE WHEN p.status = 'pending' THEN jp.asin END) as new,
-			COUNT(DISTINCT CASE WHEN p.status != 'pending' THEN jp.asin END) as updated
-		FROM job_products jp
-		LEFT JOIN product p ON jp.asin = p.asin
-		WHERE jp.job_id = $1
-	`
-
-	m.db.QueryRow(ctx, countQuery, jobID).Scan(
-		&job.ProductsFound, &job.ProductsNew, &job.ProductsUpdated,
-	)
-
+		        SELECT 
+					COUNT(*) as found,
+					COUNT(*) FILTER (WHERE p.created_at > j.created_at) as new,
+					COUNT(*) FILTER (WHERE p.updated_at > j.created_at AND p.created_at <= j.created_at) as updated
+				FROM job_products jp
+				LEFT JOIN products p ON jp.asin = p.asin
+				WHERE jp.job_id = $1
+			`).Scan(&job.ProductsFound, &job.ProductsNew, &job.ProductsUpdated)
 	return job, nil
 }
 
@@ -203,12 +198,11 @@ func (m *Manager) ListJobs(ctx context.Context) ([]*Job, error) {
 // GetJobProducts retrieves products found by a job
 func (m *Manager) GetJobProducts(ctx context.Context, jobID string) ([]*JobProduct, error) {
 	query := `
-		SELECT jp.job_id, jp.asin, jp.page_number, p.title,
-		       CASE WHEN p.size_chart_data IS NOT NULL THEN true ELSE false END as has_sizes
+		SELECT jp.job_id, jp.asin, p.title, jp.found_at, jp.status, jp.error_message
 		FROM job_products jp
-		JOIN product p ON jp.asin = p.asin
+		JOIN products p ON jp.asin = p.asin
 		WHERE jp.job_id = $1
-		ORDER BY jp.page_number, jp.asin
+		ORDER BY jp.found_at DESC
 	`
 
 	rows, err := m.db.Query(ctx, query, jobID)
@@ -262,7 +256,7 @@ func (m *Manager) GetStats(ctx context.Context) (*Stats, error) {
 		SELECT 
 			COUNT(*) as total,
 			COUNT(CASE WHEN size_chart_data IS NOT NULL THEN 1 END) as with_sizes
-		FROM product
+		FROM products
 	`
 
 	m.db.QueryRow(ctx, productQuery).Scan(&stats.TotalProducts, &stats.ProductsWithSizes)

@@ -41,7 +41,7 @@ type SizeTable struct {
 // Deprecated: Use InsertProductLifecycle for the new product table
 func (db *DB) InsertProduct(ctx context.Context, p *Product) error {
 	query := `
-		INSERT INTO product (asin, title, brand, category, detail_page_url, status)
+		INSERT INTO products (asin, title, brand, category, detail_page_url, status)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (asin) DO UPDATE SET
 			title = EXCLUDED.title,
@@ -71,7 +71,7 @@ func (db *DB) UpdateProductSizes(ctx context.Context, asin string, sizeTable *Si
 	}
 
 	query := `
-		UPDATE product SET
+		UPDATE products SET
 			size_chart_data = $2,
 			status = $3,
 			updated_at = CURRENT_TIMESTAMP
@@ -100,7 +100,7 @@ func (db *DB) UpdateProductColors(ctx context.Context, asin string, colors []*mo
 
 	// Try to update the products table first (if it exists)
 	query := `
-		UPDATE product SET
+		UPDATE products SET
 			color_variations = $2,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE asin = $1`
@@ -109,7 +109,7 @@ func (db *DB) UpdateProductColors(ctx context.Context, asin string, colors []*mo
 	if err != nil {
 		// If products table doesn't have color_variations column, try product lifecycle table
 		queryLifecycle := `
-			UPDATE product SET
+			UPDATE products SET
 				color_variations = $2,
 				enrichment_source = 'scraper',
 				updated_at = CURRENT_TIMESTAMP
@@ -133,7 +133,7 @@ func (db *DB) UpdateProductColors(ctx context.Context, asin string, colors []*mo
 // Deprecated: Use product lifecycle table methods instead
 func (db *DB) UpdateProductStatus(ctx context.Context, asin string, status ProductStatus, errorMsg string) error {
 	query := `
-		UPDATE product SET
+		UPDATE products SET
 			status = $2,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE asin = $1`
@@ -151,7 +151,7 @@ func (db *DB) UpdateProductStatus(ctx context.Context, asin string, status Produ
 func (db *DB) GetPendingProducts(ctx context.Context, limit int) ([]*Product, error) {
 	query := `
 		SELECT asin, title, brand, category, detail_page_url, status, created_at, updated_at
-		FROM product
+		FROM products
 		WHERE status = $1
 		ORDER BY created_at ASC
 		LIMIT $2`
@@ -184,7 +184,7 @@ func (db *DB) GetProduct(ctx context.Context, asin string) (*Product, error) {
 	query := `
 		SELECT asin, title, brand, category, detail_page_url, size_chart_data,
 			   status, created_at, updated_at
-		FROM product
+		FROM products
 		WHERE asin = $1`
 
 	p := &Product{}
@@ -207,7 +207,7 @@ func (db *DB) GetProduct(ctx context.Context, asin string) (*Product, error) {
 func (db *DB) CountProductsByStatus(ctx context.Context) (map[ProductStatus]int, error) {
 	query := `
 		SELECT status, COUNT(*) as count
-		FROM product
+		FROM products
 		GROUP BY status`
 
 	rows, err := db.pool.Query(ctx, query)

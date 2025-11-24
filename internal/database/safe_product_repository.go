@@ -378,7 +378,7 @@ func (spr *SafeProductRepository) GetProductLifecycleByASIN(ctx context.Context,
 			material_composition, material_full_text, care_instructions,
 			color, color_variations, material, gender, product_groups, reviews_content,
 			is_prime_eligible, in_stock, variation_attributes, model
-		FROM product
+		FROM products
 		WHERE asin = $1`
 
 	var p ProductLifecycle
@@ -523,7 +523,7 @@ func (spr *SafeProductRepository) insertProductLifecycleTx(ctx context.Context, 
 	}
 
 	query := `
-		INSERT INTO product (
+		INSERT INTO products (
 			id, asin, title, brand, detail_page_url, category, status, size_chart_data,
 			image_urls, features, current_price, currency, rating, review_count,
 			available_sizes, gender, size, color, product_group, reviews_content,
@@ -556,7 +556,7 @@ func (spr *SafeProductRepository) insertProductLifecycleTx(ctx context.Context, 
 
 func (spr *SafeProductRepository) updateProductLifecycleTx(ctx context.Context, tx Tx, p *ProductLifecycle) error {
 	query := `
-		UPDATE product SET
+		UPDATE products SET
 			title = $2,
 			brand = $3,
 			detail_page_url = $4,

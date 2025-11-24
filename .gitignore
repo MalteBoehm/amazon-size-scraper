@@ -71,11 +71,10 @@ debug_*.go
 # Compiled binaries
 server
 server-linux
-amazon-scraper
 /amazon-scraper
 batch-enricher
 lifecycle-consumer
-size-scraper
+/size-scraper
 job-scraper
 redis-job-consumer
 

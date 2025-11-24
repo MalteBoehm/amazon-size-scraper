@@ -52,7 +52,7 @@ func (db *DB) InsertProductLifecycle(ctx context.Context, p *ProductLifecycle) e
 	}
 
 	query := `
-		INSERT INTO product (
+		INSERT INTO products (
 			asin, title, brand, detail_page_url, category, status, size_chart_data,
 			image_urls, features, current_price, currency, rating, review_count,
 			available_sizes, gender, size, color, product_group, reviews_content,
@@ -159,7 +159,7 @@ func (db *DB) GetProductLifecycleByASIN(ctx context.Context, asin string) (*Prod
 			image_urls, features, current_price, currency,
 			rating, review_count, status, category,
 			available_sizes, size_chart_data, created_at, updated_at
-		FROM product
+		FROM products
 		WHERE asin = $1`
 
 	var p ProductLifecycle
@@ -204,7 +204,7 @@ func (db *DB) UpdateProductLifecycleSizeTable(ctx context.Context, asin string, 
 	}
 
 	query := `
-		UPDATE product SET
+		UPDATE products SET
 			size_chart_data = $2,
 			status = 'SCRAPED',
 			updated_at = NOW()
@@ -359,7 +359,7 @@ func ValidateSizeTableWithDetails(st *SizeTable) (bool, []string) {
 // UpdateProductLifecycleWithFullData updates a product with complete scraped data
 func (db *DB) UpdateProductLifecycleWithFullData(ctx context.Context, p *ProductLifecycle) error {
 	query := `
-		UPDATE product SET
+		UPDATE products SET
 			title = $2,
 			brand = $3,
 			detail_page_url = $4,

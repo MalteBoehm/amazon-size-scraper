@@ -168,7 +168,7 @@ func getEnrichmentStats(db *sql.DB) (*EnrichmentStats, error) {
 
 	// Total products
 	err := db.QueryRow(`
-		SELECT COUNT(*) FROM product WHERE status != 'error'
+		SELECT COUNT(*) FROM products WHERE status != 'error'
 	`).Scan(&stats.TotalProducts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get total products: %w", err)
@@ -176,7 +176,7 @@ func getEnrichmentStats(db *sql.DB) (*EnrichmentStats, error) {
 
 	// Products without colors
 	err = db.QueryRow(`
-		SELECT COUNT(*) FROM product
+		SELECT COUNT(*) FROM products
 		WHERE status != 'error'
 		AND (color_variations IS NULL
 			OR color_variations::text = '[]'
@@ -188,7 +188,7 @@ func getEnrichmentStats(db *sql.DB) (*EnrichmentStats, error) {
 
 	// Products with scraper colors
 	err = db.QueryRow(`
-		SELECT COUNT(*) FROM product
+		SELECT COUNT(*) FROM products
 		WHERE status != 'error'
 		AND enrichment_source = 'scraper'
 		AND color_variations IS NOT NULL
@@ -236,7 +236,7 @@ func runEnrichmentCycle(ctx context.Context, config *Config, logger *slog.Logger
 
 	// Get products that need enrichment
 	query := `
-		SELECT asin FROM product
+		SELECT asin FROM products
 		WHERE status != 'error'
 		AND (
 			(color_variations IS NULL

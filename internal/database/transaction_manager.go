@@ -426,7 +426,7 @@ func (pts *ProductTransactionService) insertProductLifecycleTx(ctx context.Conte
 	}
 
 	query := `
-		INSERT INTO product (
+		INSERT INTO products (
 			id, asin, title, brand, detail_page_url, category, status, size_chart_data,
 			image_urls, features, current_price, currency, rating, review_count,
 			available_sizes, gender, size, color, product_group, reviews_content,
@@ -524,7 +524,7 @@ func (pts *ProductTransactionService) insertProductLifecycleTx(ctx context.Conte
 
 func (pts *ProductTransactionService) updateProductLifecycleTx(ctx context.Context, tx Tx, p *ProductLifecycle) error {
 	query := `
-		UPDATE product SET
+		UPDATE products SET
 			title = $2,
 			brand = $3,
 			detail_page_url = $4,
