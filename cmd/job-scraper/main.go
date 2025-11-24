@@ -436,10 +436,10 @@ func storeProduct(ctx context.Context, db *intdb.DB, jobID string, result scrape
             // Insert new product
             query := `
                 INSERT INTO product (
-                    asin, title, brand, category, detail_page_url,
-                    size_chart_data, color_variations, status
+                    asin, title, brand, category, url,
+                    size_table, status
                 ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8
+                    $1, $2, $3, $4, $5, $6, $7
                 )`
 
             _, err = tx.Exec(ctx, query,
@@ -448,8 +448,7 @@ func storeProduct(ctx context.Context, db *intdb.DB, jobID string, result scrape
                 brand,
                 "", // category - will be filled by enrichment
                 detailPageURL,
-                nil, // size_chart_data - will be filled by scraping
-                nil, // color_variations - will be filled by enrichment
+                nil, // size_table - will be filled by scraping
                 "PENDING", // status - use correct default value
             )
             if err != nil {
