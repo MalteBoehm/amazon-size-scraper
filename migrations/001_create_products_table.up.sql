@@ -24,11 +24,11 @@ CREATE TABLE IF NOT EXISTS product (
 );
 
 -- Index for status queries
-CREATE INDEX idx_product_status ON product(status);
+CREATE INDEX IF NOT EXISTS idx_product_status ON product(status);
 
 -- Index for timestamp queries
-CREATE INDEX idx_product_created_at ON product(created_at);
-CREATE INDEX idx_product_scraped_at ON product(scraped_at);
+CREATE INDEX IF NOT EXISTS idx_product_created_at ON product(created_at);
+CREATE INDEX IF NOT EXISTS idx_product_scraped_at ON product(scraped_at);
 
 -- Trigger to update updated_at
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -39,5 +39,11 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
-CREATE TRIGGER update_product_updated_at BEFORE UPDATE
-    ON product FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_product_updated_at') THEN
+        CREATE TRIGGER update_product_updated_at BEFORE UPDATE
+            ON product FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    END IF;
+END
+$$;

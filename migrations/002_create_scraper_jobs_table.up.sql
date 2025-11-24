@@ -15,8 +15,8 @@ CREATE TABLE IF NOT EXISTS scraper_jobs (
 );
 
 -- Create indexes for performance
-CREATE INDEX idx_scraper_jobs_status ON scraper_jobs(status);
-CREATE INDEX idx_scraper_jobs_created_at ON scraper_jobs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scraper_jobs_status ON scraper_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_scraper_jobs_created_at ON scraper_jobs(created_at DESC);
 
 -- Create job_products table to track which products were found by which job
 CREATE TABLE IF NOT EXISTS job_products (
@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS job_products (
 );
 
 -- Create index for faster lookups
-CREATE INDEX idx_job_products_asin ON job_products(asin);
+CREATE INDEX IF NOT EXISTS idx_job_products_asin ON job_products(asin);
 
 -- Add comment to tables
 COMMENT ON TABLE scraper_jobs IS 'Tracks Amazon category/search scraping jobs';

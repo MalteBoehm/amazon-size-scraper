@@ -15,10 +15,10 @@ CREATE TABLE IF NOT EXISTS outbox_event (
 );
 
 -- Indexes for efficient querying
-CREATE INDEX idx_outbox_event_status_retry ON outbox_event(status, next_retry_at) 
+CREATE INDEX IF NOT EXISTS idx_outbox_event_status_retry ON outbox_event(status, next_retry_at) 
     WHERE status IN ('pending', 'failed');
-CREATE INDEX idx_outbox_event_created_at ON outbox_event(created_at);
-CREATE INDEX idx_outbox_event_aggregate ON outbox_event(aggregate_type, aggregate_id);
+CREATE INDEX IF NOT EXISTS idx_outbox_event_created_at ON outbox_event(created_at);
+CREATE INDEX IF NOT EXISTS idx_outbox_event_aggregate ON outbox_event(aggregate_type, aggregate_id);
 
 -- Comments
 COMMENT ON TABLE outbox_event IS 'Transactional outbox for reliable event publishing';
