@@ -37,16 +37,11 @@ func NewSqlDB(ctx context.Context, cfg Config) (*DB, error) {
 		sslMode = "disable"
 	}
 	connStr := fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s application_name=amazon-size-scraper search_path=public",
 		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.Database, sslMode,
 	)
 
-	// Log connection attempt (masking password)
-	maskedConnStr := fmt.Sprintf(
-		"host=%s port=%d user=%s password=**** dbname=%s sslmode=%s",
-		cfg.Host, cfg.Port, cfg.User, cfg.Database, sslMode,
-	)
-	fmt.Printf("[DB] Attempting connection with DSN: %s\n", maskedConnStr)
+
 
 	// Open database connection
 	sqlDB, err := sql.Open("postgres", connStr)
