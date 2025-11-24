@@ -68,6 +68,13 @@ fi
 
 # Give time for any database migrations to complete
 echo "[ENTRYPOINT] Waiting for database migrations..."
+
+# Normalize database name (handle tall_affiliate vs tall-affiliate inconsistency)
+if [ "$DB_NAME" = "tall_affiliate" ] || [ "$DB_NAME" = "amazon_scraper" ]; then
+    echo "[ENTRYPOINT] Normalizing database name from '$DB_NAME' to 'tall-affiliate'"
+    export DB_NAME="tall-affiliate"
+fi
+
 echo "[ENTRYPOINT] DEBUG: Database name that will be used: ${DB_NAME}"
 echo "[ENTRYPOINT] DEBUG: Full database connection info: ${DB_HOST}:${DB_PORT}/${DB_NAME}"
 

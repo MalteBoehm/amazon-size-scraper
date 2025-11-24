@@ -341,6 +341,22 @@ func main() {
 		"pending", counts[database.StatusPending],
 		"completed", counts[database.StatusCompleted],
 		"failed", counts[database.StatusFailed])
+
+	// Prevent restart loop in deployment
+	logger.Info("service entering idle mode", "check_interval", "1m")
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Optional: could trigger another scrape cycle here if desired
+			// For now just keep alive to avoid container restarts
+			// logger.Debug("service heartbeat")
+		}
+	}
 }
 
 func getEnv(key, defaultValue string) string {
