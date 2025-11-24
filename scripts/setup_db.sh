@@ -6,6 +6,8 @@ DB_NAME="${DB_NAME:-tall-affiliate}"
 DB_USER="${DB_USER:-postgres}"
 DB_HOST="${DB_HOST:-localhost}"
 DB_PORT="${DB_PORT:-5432}"
+# Use PGPASSWORD for authentication
+export PGPASSWORD="${DB_PASSWORD}"
 
 echo "Setting up database: $DB_NAME"
 
