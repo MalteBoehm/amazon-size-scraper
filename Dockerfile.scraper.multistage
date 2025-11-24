@@ -14,7 +14,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates tzdata git wget curl postgresql-client \
+    ca-certificates tzdata git wget curl postgresql-client netcat-openbsd \
     && rm -rf /var/lib/apt/lists/* \
     && ln -fs /usr/share/zoneinfo/$TZ /etc/localtime \
     && dpkg-reconfigure -f noninteractive tzdata \
@@ -34,7 +34,8 @@ RUN go mod download
 COPY . .
 # Build the binary specified by BINARY arg (default: size-scraper)
 ARG BINARY=size-scraper
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/${BINARY} ./cmd/${BINARY}
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/${BINARY} ./cmd/${BINARY} && \
+    chmod +x /app/entrypoint.sh
 
 # Install Playwright-Go driver and ensure Chromium is available
 RUN echo "Installing Playwright browsers..." && \
@@ -58,4 +59,5 @@ RUN chmod -R 755 /ms-playwright || echo "Permission setting failed"
 EXPOSE 8084
 # Use the binary specified by BINARY arg
 ARG BINARY=size-scraper
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["sh", "-c", "exec /app/$(basename ${BINARY:-size-scraper})"]

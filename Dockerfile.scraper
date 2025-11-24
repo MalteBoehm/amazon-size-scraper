@@ -14,10 +14,13 @@ RUN go build -o /out/$BINARY ./cmd/$BINARY
 
 FROM alpine:3.19
 WORKDIR /app
-RUN apk add --no-cache ca-certificates tzdata postgresql-client
+RUN apk add --no-cache ca-certificates tzdata postgresql-client netcat-openbsd
 COPY --from=builder /out/* /app/
 COPY --from=builder /src/migrations /app/migrations
 COPY --from=builder /src/scripts /app/scripts
+COPY --from=builder /src/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
-# Use the binary name as the default command
+# Use the entrypoint script to handle startup
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["sh", "-c", "exec /app/$(basename ${BINARY:-lifecycle-consumer})"]

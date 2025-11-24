@@ -70,7 +70,18 @@ fi
 echo "[ENTRYPOINT] Waiting for database migrations..."
 echo "[ENTRYPOINT] DEBUG: Database name that will be used: ${DB_NAME}"
 echo "[ENTRYPOINT] DEBUG: Full database connection info: ${DB_HOST}:${DB_PORT}/${DB_NAME}"
-sleep 10
+
+# Run database setup if script exists
+if [ -f "./scripts/setup_db.sh" ]; then
+    echo "[ENTRYPOINT] 🔄 Running database setup script..."
+    chmod +x ./scripts/setup_db.sh
+    ./scripts/setup_db.sh
+    echo "[ENTRYPOINT] ✅ Database setup completed"
+else
+    echo "[ENTRYPOINT] ⚠️ Database setup script not found at ./scripts/setup_db.sh"
+fi
+
+sleep 2
 
 # Normalize proxy list path if a directory was mounted
 if [ "${USE_PROXIES}" = "true" ] && [ -n "${PROXY_LIST_FILE}" ] && [ -d "${PROXY_LIST_FILE}" ]; then
