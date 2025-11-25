@@ -22,6 +22,7 @@ import (
     "github.com/maltedev/amazon-size-scraper/internal/scraper"
     "github.com/maltedev/amazon-size-scraper/pkg/logger"
     tallEvents "github.com/MalteBoehm/tall-affiliate-common/pkg/events"
+    "github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -67,8 +68,12 @@ func main() {
 
     // Build database config (normalize DB name if needed)
     dbName := cfg.Database.DBName
+    // Handle database name inconsistencies across the system
+    // The actual database on the server is named "tall-affiliate" (with hyphen)
+    // but different parts of the code use different defaults
     if dbName == "amazon_scraper" || dbName == "tall_affiliate" {
         dbName = "tall-affiliate"
+        logger.Info("Database name normalized", "original", cfg.Database.DBName, "final", dbName)
     }
 
     // Allow overriding via DATABASE_URL env only when all fields are empty
@@ -106,6 +111,43 @@ func main() {
         os.Exit(1)
     }
     defer db.Close()
+
+    // Initialize Redis connection for Outbox Relay
+    redisHost := firstNonEmpty(os.Getenv("REDIS_HOST"), "localhost")
+    redisPort := firstNonEmpty(os.Getenv("REDIS_PORT"), "6379")
+    redisAddr := fmt.Sprintf("%s:%s", redisHost, redisPort)
+    
+    redisOpts := &redis.Options{
+        Addr:     redisAddr,
+        Password: os.Getenv("REDIS_PASSWORD"),
+        Username: os.Getenv("REDIS_USERNAME"),
+    }
+    
+    rdb := redis.NewClient(redisOpts)
+    // Test Redis connection
+    if err := rdb.Ping(ctx).Err(); err != nil {
+        logger.Error("Failed to connect to Redis", "error", err, "addr", redisAddr)
+        os.Exit(1)
+    }
+    defer rdb.Close()
+    logger.Info("Connected to Redis", "addr", redisAddr)
+
+    // Start Outbox Relay
+    // This ensures events written to outbox_event table are published to Redis streams
+    relay := intdb.NewRelay(db, rdb, logger, intdb.RelayConfig{
+        PollInterval: 5 * time.Second,
+        BatchSize:    100,
+    })
+
+    go func() {
+        logger.Info("Starting Outbox Relay")
+        if err := relay.Start(ctx); err != nil {
+            // Only log error if not canceled
+            if ctx.Err() == nil {
+                logger.Error("Relay stopped unexpectedly", "error", err)
+            }
+        }
+    }()
 
 	// Initialize browser pool
 	browserOpts := browser.Options{
