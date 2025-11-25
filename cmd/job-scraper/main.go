@@ -457,7 +457,7 @@ func storeProduct(ctx context.Context, db *intdb.DB, jobID string, result scrape
     err = db.Transaction(ctx, func(tx intdb.Tx) error {
         // Check if product already exists
         var existingCount int
-        err := tx.QueryRow(ctx, "SELECT COUNT(*) FROM product WHERE asin = $1", result.ASIN).Scan(&existingCount)
+        err := tx.QueryRow(ctx, "SELECT COUNT(*) FROM products WHERE asin = $1", result.ASIN).Scan(&existingCount)
         if err != nil {
             return fmt.Errorf("failed to check existing product: %w", err)
         }
@@ -477,9 +477,9 @@ func storeProduct(ctx context.Context, db *intdb.DB, jobID string, result scrape
 
             // Insert new product
             query := `
-                INSERT INTO product (
-                    asin, title, brand, category, url,
-                    size_table, status
+                INSERT INTO products (
+                    asin, title, brand, category, detail_page_url,
+                    size_chart_data, status
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7
                 )`
@@ -490,7 +490,7 @@ func storeProduct(ctx context.Context, db *intdb.DB, jobID string, result scrape
                 brand,
                 "", // category - will be filled by enrichment
                 detailPageURL,
-                nil, // size_table - will be filled by scraping
+                nil, // size_chart_data - will be filled by scraping
                 "PENDING", // status - use correct default value
             )
             if err != nil {
